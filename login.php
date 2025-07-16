@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SERVER Login</title>
+    <title>WireGuard+ Login</title>
     <script src="tailwindcss.js"></script>
     <style>
         body { font-family: 'Inter', sans-serif; background-color: #0F172A; }
@@ -15,13 +15,13 @@
 
     <div class="min-h-screen flex items-center justify-center p-4">
         <div class="w-full max-w-md glassmorphism rounded-2xl p-8">
-            <h2 class="text-3xl font-bold text-white mb-6 text-center">Вход</h2>
+           
             
             <form class="space-y-6" action="login.php" method="POST">
                 <div>
-                    <label for="username" class="block mb-2 text-sm font-medium text-slate-400">Пользователь:</label>
-                    <input type="text" id="username" name="username" required value="root" class="w-full bg-slate-700/50 border border-slate-600 rounded-lg p-3 text-white placeholder-slate-400 focus:ring-2 focus:ring-violet-500 focus:outline-none transition">
+                    <img src="logo.png" alt="WireGuard Logo" class="w-48 h-48 mx-auto mb-4">
                 </div>
+                 <h2 class="text-3xl font-bold text-white mb-6 text-center">Вход</h2>
                 <div>
                     <label for="password" class="block mb-2 text-sm font-medium text-slate-400">Пароль:</label>
                     <input type="password" id="password" name="password" required class="w-full bg-slate-700/50 border border-slate-600 rounded-lg p-3 text-white placeholder-slate-400 focus:ring-2 focus:ring-violet-500 focus:outline-none transition">
