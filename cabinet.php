@@ -33,12 +33,20 @@ if (!array_key_exists($menu_item, $menu_pages)) {
     <script src="tailwindcss.js"></script>
 
     <style>
-        body { font-family: 'Inter', sans-serif; background-color: #0F172A; }
-        .glassmorphism { 
-            background: rgba(30, 41, 59, 0.6); /* bg-slate-800 с прозрачностью */
-            backdrop-filter: blur(16px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
+    body { font-family: 'Inter', sans-serif; background-color: #0F172A; }
+    .glassmorphism { 
+        background: rgba(30, 41, 59, 0.6);
+        backdrop-filter: blur(16px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    /* ДОБАВЬ НОВЫЕ СТИЛИ СЮДА */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #1e293b; }
+    ::-webkit-scrollbar-thumb { background-color: #475569; border-radius: 10px; border: 2px solid #1e293b; }
+    ::-webkit-scrollbar-thumb:hover { background-color: #64748b; }
+    * { scrollbar-width: thin; scrollbar-color: #475569 #1e293b; }
+
     </style>
 
     <script>
