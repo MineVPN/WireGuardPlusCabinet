@@ -59,8 +59,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             if ($original_content) {
                 // 2. Определяем строки, которые нужно добавить
                 $lines_to_add = "Table = off\n"
-                              . "PostUp = ip route add default dev %i table 200\n"
-                              . "PostDown = ip route del default dev %i table 200";
+                              . "PostUp = ip route add default dev %i table 120\n"
+                              . "PostDown = ip route del default dev %i table 120";
 
                 // 3. Используем регулярное выражение для вставки строк после [Interface]
                 // Это сработает, даже если после [Interface] есть пробелы или переносы строк
