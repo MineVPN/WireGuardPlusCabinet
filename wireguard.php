@@ -73,7 +73,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                     shell_exec('sudo systemctl start wg-quick@wg1');
                     sleep(4);
                     // Уведомление об успехе
-                    echo "<script>Notice('Конфигурация WireGuard успешно установлена и модифицирована!', 'success'); window.setTimeout(() => window.location = 'cabinet.php?menu=wireguard', 2000);</script>";
+                    echo "<script>window.location = 'cabinet.php?menu=wireguard';</script>";
                 } else {
                     echo "<script>Notice('Ошибка при сохранении файла. Проверьте права на /etc/wireguard/.', 'error');</script>";
                 }
@@ -163,3 +163,4 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         }
     });
 </script>
+
