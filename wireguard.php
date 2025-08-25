@@ -60,6 +60,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 // 2. Определяем строки, которые нужно добавить
                 $lines_to_add = "Table = off\n"
                               . "PostUp = ip route add default dev %i table 120\n"
+                              . "PostUp = ip rule add from 10.55.55.0/24 table vpnchain\n"
                               . "PostDown = ip route del default dev %i table 120";
 
                 // 3. Используем регулярное выражение для вставки строк после [Interface]
@@ -163,4 +164,5 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         }
     });
 </script>
+
 
