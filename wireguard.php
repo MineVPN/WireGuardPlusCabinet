@@ -32,13 +32,19 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         echo "<script>window.location = 'cabinet.php?menu=wireguard';</script>";
         exit();
     }
-    if (isset($_POST['wireguard_stop'])) {
-        shell_exec("sudo systemctl stop wg-quick@wg1");
+    if (isset($_POST['wireguard_restart'])) {
+        shell_exec("sudo systemctl restart wg-quick@wg1");
         sleep(3);
         echo "<script>window.location = 'cabinet.php?menu=wireguard';</script>";
         exit();
     }
-
+    if (isset($_POST['wireguard_del'])) {
+        shell_exec("sudo systemctl stop wg-quick@wg1");
+        sleep(3);
+        shell_exec("sudo rm /etc/wireguard/wg1.conf");
+        echo "<script>window.location = 'cabinet.php?menu=wireguard';</script>";
+        exit();
+    }
     // --- ИЗМЕНЕННЫЙ БЛОК ОБРАБОТКИ ЗАГРУЗКИ ФАЙЛА ---
     if (isset($_FILES["config_file"]) && !empty($_FILES["config_file"]["name"])) {
         $allowed_extensions = array('conf');
@@ -112,16 +118,34 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         </div>
 
         <form method="post" class="mt-8">
-            <?php if ($type == "wireguard"): ?>
-                <?php if ($connection_status == "disconnected"): ?>
-                    <button type="submit" name="wireguard_start" class="w-full bg-green-600 text-white font-bold py-3 rounded-lg hover:bg-green-700 transition-all">Запустить WireGuard</button>
-                <?php else: ?>
-                    <button type="submit" name="wireguard_stop" class="w-full bg-red-600 text-white font-bold py-3 rounded-lg hover:bg-red-700 transition-all">Остановить WireGuard</button>
-                <?php endif; ?>
+    <?php if ($type == "wireguard"): ?>
+        <div class="flex flex-col space-y-4">
+            <?php if ($connection_status == "disconnected"): ?>
+                
+                <button type="submit" name="wireguard_start" class="w-full bg-green-600 text-white font-bold py-3 rounded-lg hover:bg-green-700 transition-all">
+                    Запустить WireGuard
+                </button>
+
             <?php else: ?>
-                 <button disabled class="w-full bg-slate-700 text-slate-500 font-bold py-3 rounded-lg cursor-not-allowed">Действий нет</button>
+
+                <button type="submit" name="wireguard_restart" class="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition-all">
+                    Перезапустить WireGuard
+                </button>
+
             <?php endif; ?>
-        </form>
+
+            <button type="submit" name="wireguard_del" class="w-full bg-red-600 text-white font-bold py-3 rounded-lg hover:bg-red-700 transition-all">
+                Удалить WireGuard конфиг
+            </button>
+        </div>
+    <?php else: ?>
+
+        <button disabled class="w-full bg-slate-700 text-slate-500 font-bold py-3 rounded-lg cursor-not-allowed">
+            Действий нет
+        </button>
+
+    <?php endif; ?>
+</form>
     </div>
 
     <div class="glassmorphism rounded-2xl p-6 flex flex-col">
