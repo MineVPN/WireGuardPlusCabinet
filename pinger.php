@@ -1,11 +1,7 @@
 <?php
-// Твоя PHP-логика остается здесь без изменений
-session_start();
-
-if (!isset($_SESSION["authenticated"]) || $_SESSION["authenticated"] !== true) {
-    header("Location: login.php");
-    exit();
-}
+// Твоя PHP-логика остаётся здесь без изменений
+require_once __DIR__ . '/includes/wgp_helpers.php';
+wgp_require_auth();
 ?>
 
 <div class="flex flex-col gap-8">
@@ -14,6 +10,11 @@ if (!isset($_SESSION["authenticated"]) || $_SESSION["authenticated"] !== true) {
         <div class="flex flex-col sm:flex-row items-center gap-4">
             <label for="targetAddress" class="text-lg font-medium text-white">IP:</label>
             <input type="text" id="targetAddress" placeholder="Введите адрес, например, 8.8.8.8" value="8.8.8.8" class="flex-grow w-full bg-slate-700/50 border border-slate-600 rounded-lg p-3 text-white placeholder-slate-400 focus:ring-2 focus:ring-violet-500 focus:outline-none transition">
+            <select id="pingIface" title="Через какой путь пинговать" class="w-full sm:w-auto bg-slate-700/50 border border-slate-600 rounded-lg p-3 text-white focus:ring-2 focus:ring-violet-500 focus:outline-none transition">
+                <option value="">По умолчанию</option>
+                <option value="wg1">Через туннель (wg1)</option>
+                <option value="nic">Напрямую (WAN)</option>
+            </select>
             <div class="flex w-full sm:w-auto gap-4">
                 <button id="startButton" class="w-1/2 sm:w-auto flex-grow bg-green-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-green-700 transition-all">Старт</button>
                 <button id="stopButton" class="w-1/2 sm:w-auto flex-grow bg-red-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-red-700 transition-all">Стоп</button>
@@ -140,7 +141,8 @@ if (!isset($_SESSION["authenticated"]) || $_SESSION["authenticated"] !== true) {
                 document.getElementById("logWindow").scrollTop = document.getElementById("logWindow").scrollHeight;
             }
         };
-        xhr.open("GET", "ping.php?host=" + encodeURIComponent(targetAddress), true);
+        xhr.open("GET", "ping.php?host=" + encodeURIComponent(targetAddress)
+                        + "&iface=" + encodeURIComponent(document.getElementById("pingIface").value), true);
         xhr.send();
     }
 </script>

@@ -1,22 +1,42 @@
 <?php
-// ----- ВСЯ ТВОЯ PHP-ЛОГИКА ОСТАЕТСЯ ЗДЕСЬ БЕЗ ИЗМЕНЕНИЙ -----
-session_start();
+// ----- ЛОГИКА КАБИНЕТА -----
+// Хелперы подключаем ДО session_start(): в них выставляются параметры
+// cookie (HttpOnly, SameSite=Strict), а после старта сессии их уже не применить.
+require_once __DIR__ . '/includes/wgp_helpers.php';
 
-if (!isset($_SESSION["authenticated"]) || $_SESSION["authenticated"] !== true) {
-    header("Location: login.php");
-    exit();
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
 }
 
-if(isset($_POST['menu'])){
+// Проверка сессии: авторизация + абсолютный лимит 8ч + простой 30мин + смена IP.
+// Раньше здесь была только проверка authenticated: login.php писал login_time,
+// last_activity и ip, но никто их не читал — таймаута фактически не было.
+$invalid = wgp_session_invalid_reason();
+if ($invalid !== '') {
+    if ($invalid === 'hijack') {
+        wgp_log('WARN', 'Сессия завершена: IP сменился с ' . ($_SESSION['ip'] ?? '?'));
+    }
+    wgp_session_kill($invalid);
+}
+$_SESSION['last_activity'] = time();
+
+// CSRF — ДО включения страницы, чтобы ни один обработчик POST не успел ничего сделать.
+// Все формы панели шлют POST сюда же, поэтому одной точки достаточно.
+wgp_csrf_require();
+
+if (isset($_POST['menu'])) {
     $_GET['menu'] = $_POST['menu'];
 }
 
-$menu_item = isset($_GET['menu']) ? $_GET['menu'] : 'openvpn';
+// Дефолт — wireguard. Раньше здесь был 'openvpn' (остаток от старой версии),
+// такого ключа в $menu_pages нет — всё равно падало в fallback ниже.
+$menu_item = isset($_GET['menu']) ? $_GET['menu'] : 'wireguard';
 
 $menu_pages = [
     'wireguard' => 'wireguard.php',
-    'ping' => 'pinger.php',
-    'route' => 'route.php'
+    'ping'      => 'pinger.php',
+    'route'     => 'route.php',
+    'logs'      => 'logs.php'
 ];
 
 if (!array_key_exists($menu_item, $menu_pages)) {
@@ -84,6 +104,12 @@ if (!array_key_exists($menu_item, $menu_pages)) {
                     <?php echo ($menu_item == 'ping') ? 'bg-violet-500/20 text-white shadow-inner' : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'; ?>">
                     <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
                     <span class="font-medium">Ping</span>
+                </a>
+
+                <a href="cabinet.php?menu=logs" class="flex items-center gap-4 px-4 py-3 rounded-lg transition-colors
+                    <?php echo ($menu_item == 'logs') ? 'bg-violet-500/20 text-white shadow-inner' : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'; ?>">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                    <span class="font-medium">Логи</span>
                 </a>
                 
                 <a href="logout.php" class="flex items-center gap-4 px-4 py-3 rounded-lg text-slate-400 hover:bg-red-500/20 hover:text-red-400 transition-colors">
