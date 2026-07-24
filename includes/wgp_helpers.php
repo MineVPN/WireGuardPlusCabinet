@@ -55,7 +55,18 @@ if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
 if (!defined('WGP_WG0_CONF'))   define('WGP_WG0_CONF',   '/etc/wireguard/wg0.conf');
 if (!defined('WGP_WG1_CONF'))   define('WGP_WG1_CONF',   '/etc/wireguard/wg1.conf');
 if (!defined('WGP_WG1_BAK'))    define('WGP_WG1_BAK',    '/etc/wireguard/wg1.conf.bak');
-if (!defined('WGP_STATE_FILE')) define('WGP_STATE_FILE', '/var/www/wg-state');
+// Каталог данных панели: root:www-data, 2770 (g+s).
+//
+// ЗАЧЕМ ОТДЕЛЬНЫЙ КАТАЛОГ: атомарная запись (tmp -> rename) требует
+// права записи в КАТАЛОГ, а не в файл. Раньше файлы лежали в /var/www
+// и /var/www/html (оба root:root 755) — www-data мог писать в сами файлы (666),
+// но НЕ мог создать *.tmp рядом. Запись молча проваливалась:
+//   • маршруты обхода не сохранялись (список оставался пустым)
+//   • мьютекс busy/running никогда не работал
+// Плюс routes.txt больше не лежит в docroot — его не скачать по HTTP.
+if (!defined('WGP_DATA_DIR'))   define('WGP_DATA_DIR',   '/var/www/wgplus');
+if (!defined('WGP_STATE_FILE')) define('WGP_STATE_FILE', WGP_DATA_DIR . '/state');
+if (!defined('WGP_ROUTES_FILE'))define('WGP_ROUTES_FILE', WGP_DATA_DIR . '/routes.txt');
 if (!defined('WGP_TABLE_ID'))   define('WGP_TABLE_ID',   '120');
 if (!defined('WGP_LOG_DIR'))    define('WGP_LOG_DIR',    '/var/log/wgplus');
 if (!defined('WGP_LOG_PANEL'))  define('WGP_LOG_PANEL',  WGP_LOG_DIR . '/panel.log');
@@ -64,8 +75,12 @@ if (!defined('WGP_LOG_EVENTS')) define('WGP_LOG_EVENTS', WGP_LOG_DIR . '/events.
 if (!defined('WGP_LOG_MAX'))    define('WGP_LOG_MAX',    2097152); // 2 MB
 if (!defined('WGP_LOG_KEEP'))   define('WGP_LOG_KEEP',   800);     // строк после ротации
 if (!defined('WGP_AUTH_FILE'))  define('WGP_AUTH_FILE',  '/var/www/wgplus-auth');
-if (!defined('WGP_SESSION_MAX')) define('WGP_SESSION_MAX', 8 * 3600); // абсолютный лимит
-if (!defined('WGP_SESSION_IDLE')) define('WGP_SESSION_IDLE', 30 * 60); // простой
+// Срок жизни сессии — ОДИН понятный параметр.
+// Было три механизма (абсолютный лимит + простой + привязка к IP).
+// Привязка к IP убрана совсем: админ подключается к своему же VPN,
+// исходный IP меняется — и сессия бы падала при каждом подключении.
+// Простой тоже убран: панель открывают раз в неделю, выкидывать через 30 мин бессмысленно.
+if (!defined('WGP_SESSION_MAX')) define('WGP_SESSION_MAX', 7 * 24 * 3600); // 7 суток
 
 // ══════════════════════════════════════════════════════════════════
 // АУТЕНТИФИКАЦИЯ
@@ -108,10 +123,7 @@ function wgp_check_password(string $input, ?string $legacyPlain = null): bool {
 }
 
 /**
- * Единая проверка живости сессии: абсолютный лимит, простой, привязка к IP.
- *
- * БЫЛО: login.php записывал login_time / last_activity / ip, но НИКТО их
- * не проверял — данные лежали мёртвым грузом, а таймаута фактически не было.
+ * Проверка сессии: залогинен ли и не истёк ли срок.
  *
  * @return string '' если сессия валидна, иначе причина для редиректа
  */
@@ -119,16 +131,9 @@ function wgp_session_invalid_reason(): string {
     if (!isset($_SESSION['authenticated']) || $_SESSION['authenticated'] !== true) {
         return 'auth';
     }
-    $now = time();
-    if (isset($_SESSION['login_time']) && ($now - (int) $_SESSION['login_time']) > WGP_SESSION_MAX) {
+    if (isset($_SESSION['login_time'])
+        && (time() - (int) $_SESSION['login_time']) > WGP_SESSION_MAX) {
         return 'timeout';
-    }
-    if (isset($_SESSION['last_activity']) && ($now - (int) $_SESSION['last_activity']) > WGP_SESSION_IDLE) {
-        return 'timeout';
-    }
-    // Смена IP в рамках одной сессии — признак угона cookie.
-    if (!empty($_SESSION['ip']) && ($_SERVER['REMOTE_ADDR'] ?? '') !== $_SESSION['ip']) {
-        return 'hijack';
     }
     return '';
 }
@@ -348,13 +353,22 @@ function wgp_wait_up(int $timeoutSec = 8): bool {
  * посреди операции. Запись атомарная: tmp -> rename.
  * chmod ПОСЛЕ rename обязателен — rename переносит владельца tmp-файла.
  */
-function wgp_state_set(string $state): void {
+function wgp_state_set(string $state): bool {
     $ts  = ($state === 'busy') ? time() : 0;
     $tmp = WGP_STATE_FILE . '.php.tmp';
-    if (@file_put_contents($tmp, "STATE={$state}\nBUSY_SINCE={$ts}\n") !== false) {
-        @rename($tmp, WGP_STATE_FILE);
-        @chmod(WGP_STATE_FILE, 0666);
+    if (@file_put_contents($tmp, "STATE={$state}\nBUSY_SINCE={$ts}\n") === false) {
+        // Раньше отказ здесь был МОЛЧАЛИВЫМ — мьютекс не работал,
+        // а никто об этом не знал.
+        wgp_log('ERR', 'Не удалось записать ' . $tmp . ' — проверьте права на ' . WGP_DATA_DIR);
+        return false;
     }
+    if (!@rename($tmp, WGP_STATE_FILE)) {
+        @unlink($tmp);
+        wgp_log('ERR', 'Не удалось обновить ' . WGP_STATE_FILE);
+        return false;
+    }
+    @chmod(WGP_STATE_FILE, 0664);
+    return true;
 }
 
 // ══════════════════════════════════════════════════════════════════

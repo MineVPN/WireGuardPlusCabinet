@@ -8,17 +8,11 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// Проверка сессии: авторизация + абсолютный лимит 8ч + простой 30мин + смена IP.
-// Раньше здесь была только проверка authenticated: login.php писал login_time,
-// last_activity и ip, но никто их не читал — таймаута фактически не было.
+// Проверка сессии: авторизован ли и не истёк ли срок.
 $invalid = wgp_session_invalid_reason();
 if ($invalid !== '') {
-    if ($invalid === 'hijack') {
-        wgp_log('WARN', 'Сессия завершена: IP сменился с ' . ($_SESSION['ip'] ?? '?'));
-    }
     wgp_session_kill($invalid);
 }
-$_SESSION['last_activity'] = time();
 
 // CSRF — ДО включения страницы, чтобы ни один обработчик POST не успел ничего сделать.
 // Все формы панели шлют POST сюда же, поэтому одной точки достаточно.

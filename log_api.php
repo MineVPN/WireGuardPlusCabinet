@@ -25,7 +25,6 @@ if (wgp_session_invalid_reason() !== '') {
     echo json_encode(['ok' => false, 'error' => 'Unauthorized']);
     exit;
 }
-$_SESSION['last_activity'] = time();
 
 header('Content-Type: application/json; charset=utf-8');
 header('Cache-Control: no-store');

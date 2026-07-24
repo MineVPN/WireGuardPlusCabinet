@@ -15,16 +15,34 @@ wgp_require_auth();
 wgp_csrf_require();
 
 $wg0ConfigFile = WGP_WG0_CONF;
-$routesFile    = __DIR__ . '/routes.txt';   // раньше был относительный путь — зависел от CWD
+$routesFile    = WGP_ROUTES_FILE;   // вне docroot, в каталоге с правами на запись
 $preference    = 30000;
 $net           = wgp_wg0_net();
 
 /** Атомарная запись списка маршрутов. */
 function wgp_saveRoutes(array $routes, string $file): bool {
-    $tmp = $file . '.tmp';
+    $dir = dirname($file);
+    if (!is_dir($dir)) {
+        wgp_log('ERR', "Каталог $dir не существует");
+        return false;
+    }
+    if (!is_writable($dir)) {
+        wgp_log('ERR', "Нет прав на запись в $dir — маршруты не сохранятся");
+        return false;
+    }
+    $tmp  = $file . '.tmp';
     $data = $routes ? implode(PHP_EOL, $routes) . PHP_EOL : '';
-    if (@file_put_contents($tmp, $data) === false) return false;
-    return @rename($tmp, $file);
+    if (@file_put_contents($tmp, $data) === false) {
+        wgp_log('ERR', "Не удалось записать $tmp");
+        return false;
+    }
+    if (!@rename($tmp, $file)) {
+        @unlink($tmp);
+        wgp_log('ERR', "Не удалось обновить $file");
+        return false;
+    }
+    @chmod($file, 0664);
+    return true;
 }
 
 function addBypassToWg0(string $ip, int $pref, string $confFile): void {
@@ -66,19 +84,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['new_ip'])) {
         echo "<script>Notice('Этот адрес уже в списке.', 'error');</script>";
 
     } else {
-        // IP валидирован как IPv4, но escapeshellarg ставим всё равно —
-        // защита не должна зависеть от одной-единственной проверки выше.
-        exec('sudo ip rule add to ' . escapeshellarg($new_ip) . " table main preference $preference");
-        addBypassToWg0($new_ip, $preference, $wg0ConfigFile);
-        // ВНИМАНИЕ: раньше здесь был `systemctl restart wg-quick@wg0` — он рвал
-        // соединение ВСЕМ клиентам ради правила, которое уже применено выше live.
-        // Запись в wg0.conf нужна только чтобы правило пережило перезагрузку.
+        // IP валидирован как IPv4, но escapeshellarg ставим всё равно.
         $routes[] = $new_ip;
-        wgp_saveRoutes($routes, $routesFile);
-        wgp_log('OK', "Добавлен обход VPN для $new_ip");
-        wgp_event('route_add', $new_ip);
-        echo "<script>Notice('Маршрут для " . htmlspecialchars($new_ip, ENT_QUOTES) . " добавлен.', 'success'); window.setTimeout(() => window.location = 'cabinet.php?menu=route', 1200);</script>";
-        exit();
+
+        // СНАЧАЛА сохраняем и ПРОВЕРЯЕМ результат.
+        // Раньше результат не проверялся — при отказе записи пользователь
+        // видел зелёное "успешно добавлено", а список оставался пустым.
+        if (!wgp_saveRoutes($routes, $routesFile)) {
+            echo "<script>Notice('Не удалось сохранить маршрут. Проверьте права на " . WGP_DATA_DIR . " и лог панели.', 'error');</script>";
+        } else {
+            exec('sudo ip rule add to ' . escapeshellarg($new_ip) . " table main preference $preference");
+            addBypassToWg0($new_ip, $preference, $wg0ConfigFile);
+            // НЕ рестартуем wg0: правило уже применено выше живьём,
+            // а запись в wg0.conf нужна только чтобы пережить перезагрузку.
+            wgp_log('OK', "Добавлен обход VPN для $new_ip");
+            wgp_event('route_add', $new_ip);
+            echo "<script>Notice('Маршрут для " . htmlspecialchars($new_ip, ENT_QUOTES) . " добавлен.', 'success'); window.setTimeout(() => window.location = 'cabinet.php?menu=route', 1200);</script>";
+            exit();
+        }
     }
 }
 
@@ -91,11 +114,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_ip'])) {
         exec('sudo ip rule del to ' . escapeshellarg($delete_ip) . " table main preference $preference");
         removeBypassFromWg0($delete_ip, $preference, $wg0ConfigFile);
         $routes = array_values(array_filter($routes, fn($ip) => $ip !== $delete_ip));
-        wgp_saveRoutes($routes, $routesFile);
-        wgp_log('OK', "Удалён обход VPN для $delete_ip");
-        wgp_event('route_del', $delete_ip);
-        echo "<script>Notice('Маршрут для " . htmlspecialchars($delete_ip, ENT_QUOTES) . " удалён.', 'success'); window.setTimeout(() => window.location = 'cabinet.php?menu=route', 1200);</script>";
-        exit();
+        if (!wgp_saveRoutes($routes, $routesFile)) {
+            echo "<script>Notice('Правило снято, но список не сохранён. Проверьте права на " . WGP_DATA_DIR . ".', 'error');</script>";
+        } else {
+            wgp_log('OK', "Удалён обход VPN для $delete_ip");
+            wgp_event('route_del', $delete_ip);
+            echo "<script>Notice('Маршрут для " . htmlspecialchars($delete_ip, ENT_QUOTES) . " удалён.', 'success'); window.setTimeout(() => window.location = 'cabinet.php?menu=route', 1200);</script>";
+            exit();
+        }
     }
 }
 ?>

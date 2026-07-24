@@ -32,9 +32,7 @@ $error_message = '';
 $attempts_file = sys_get_temp_dir() . '/wgplus_login_' . md5($_SERVER['REMOTE_ADDR'] ?? 'unknown');
 
 if (($_GET['reason'] ?? '') === 'timeout') {
-    $error_message = 'Сессия завершена из-за неактивности. Войдите снова.';
-} elseif (($_GET['reason'] ?? '') === 'hijack') {
-    $error_message = 'Сессия завершена: сменился IP-адрес. Войдите снова.';
+    $error_message = 'Срок сессии истёк. Войдите снова.';
 }
 
 /**
@@ -86,8 +84,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['password'])) {
             session_regenerate_id(true);              // против session fixation
             $_SESSION['authenticated'] = true;
             $_SESSION['login_time']    = time();
-            $_SESSION['last_activity'] = time();
-            $_SESSION['ip']            = $_SERVER['REMOTE_ADDR'] ?? '';
             unset($_SESSION['csrf']);                // новая сессия — новый токен
             @unlink($attempts_file);
             wgp_log('OK', 'Успешный вход в панель');

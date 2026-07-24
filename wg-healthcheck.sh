@@ -27,9 +27,9 @@ INTERFACE="wg1"
 WG_CONFIG="/etc/wireguard/wg1.conf"
 WG0_CONF="/etc/wireguard/wg0.conf"
 TABLE_ID="120"
-STATE_FILE="/var/www/wg-state"
+STATE_FILE="/var/www/wgplus/state"
 NIC_FILE="/var/www/html/NIC.txt"
-ROUTES_FILE="/var/www/html/routes.txt"
+ROUTES_FILE="/var/www/wgplus/routes.txt"
 SETTINGS_FILE="/var/www/wgplus-settings"
 PANEL_PORT=8998          # адрес из lk.txt должен работать ВСЕГДА
 SSH_PORT=22
@@ -161,7 +161,8 @@ read_state() {
 save_state() {
     local tmp="${STATE_FILE}.hc.tmp"
     if printf 'STATE=%s\nBUSY_SINCE=0\n' "$1" > "$tmp" 2>/dev/null && mv -f "$tmp" "$STATE_FILE"; then
-        chmod 666 "$STATE_FILE" 2>/dev/null || true
+        chown root:www-data "$STATE_FILE" 2>/dev/null || true
+        chmod 664 "$STATE_FILE" 2>/dev/null || true
     else
         rm -f "$tmp" 2>/dev/null
     fi
@@ -309,22 +310,25 @@ tunnel_alive() {
 }
 
 # ═══════════════════════════════════════════════════════
-# KILL SWITCH
+# РЕЖИМЫ МАРШРУТИЗАЦИИ КЛИЕНТСКОГО ТРАФИКА
 # ═══════════════════════════════════════════════════════
 #
-# ПРОБЛЕМА, КОТОРУЮ РЕШАЕМ:
-# При падении wg1 трафик клиентов проваливается из таблицы 120 в main,
-# уходит через NIC и попадает под MASQUERADE из инсталлятора — то есть
-# продолжает работать, но уже с РЕАЛЬНЫМ IP сервера. Пользователь этого
-# не замечает: интернет есть, VPN «работает». Это утечка по построению.
+# ДВА РЕЖИМА, переключаются АВТОМАТИЧЕСКИ по наличию wg1.conf:
 #
-# РЕШЕНИЕ: FORWARD из wg0 наружу разрешён только в туннель. Исключение —
-# цепочка WGPLUS_BYPASS с адресами из routes.txt (страница «Route»).
+#   direct — второго конфига НЕТ.
+#            Работаем как обычный WireGuard-сервер: клиенты выходят
+#            в интернет через NIC сервера.
 #
-# ПОЧЕМУ ЭТИМ ЗАНИМАЕТСЯ ДЕМОН, А НЕ ПАНЕЛЬ:
-# иначе www-data пришлось бы дать sudo на iptables — а это уже практически
-# root. Демон и так работает от root, читает routes.txt и синхронизирует
-# цепочку сам. Панель просто пишет файл.
+#   chain  — wg1.conf есть.
+#            Весь трафик идёт только через wg1. Выход через NIC закрыт,
+#            иначе при падении wg1 трафик тихо пойдёт с реальным IP
+#            сервера, а пользователь этого не заметит. Исключение —
+#            адреса из routes.txt (цепочка WGPLUS_BYPASS).
+#            killswitch=false в настройках отключает эту блокировку.
+#
+# Почему этим занимается демон: иначе www-data пришлось бы дать sudo на
+# iptables — а это практически root. Панель только кладёт wg1.conf,
+# а режим переключается сам в течение 5 секунд.
 
 killswitch_enabled() {
     # По умолчанию включён: отсутствие файла настроек не должно означать утечку.
@@ -332,73 +336,117 @@ killswitch_enabled() {
     ! grep -q '^killswitch=false$' "$SETTINGS_FILE"
 }
 
-# Без iptables все нижеследующие вызовы молча провалятся (у них 2>/dev/null),
-# и Kill Switch будет считаться активным, не будучи таковым. Проверяем явно.
-# Актуально для CentOS с firewalld и минимальных образов без iptables.
+# Без iptables все нижеследующие вызовы молча провалятся (у них 2>/dev/null).
 iptables_available() {
     command -v iptables >/dev/null 2>&1
 }
 
-apply_killswitch() {
+# Сносит ВСЕ наши правила FORWARD для wg0 — перед установкой нового режима.
+# while — потому что от предыдущих запусков могли остаться дубли.
+clear_forward_rules() {
+    [ -z "$WAN_IF" ] && return 0
+    while iptables -C FORWARD -i wg0 -o "$INTERFACE" -j ACCEPT 2>/dev/null; do
+        iptables -D FORWARD -i wg0 -o "$INTERFACE" -j ACCEPT 2>/dev/null || break
+    done
+    while iptables -C FORWARD -i "$INTERFACE" -o wg0 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; do
+        iptables -D FORWARD -i "$INTERFACE" -o wg0 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || break
+    done
+    while iptables -C FORWARD -i wg0 -j WGPLUS_BYPASS 2>/dev/null; do
+        iptables -D FORWARD -i wg0 -j WGPLUS_BYPASS 2>/dev/null || break
+    done
+    while iptables -C FORWARD -i wg0 -o "$WAN_IF" -j REJECT --reject-with icmp-net-unreachable 2>/dev/null; do
+        iptables -D FORWARD -i wg0 -o "$WAN_IF" -j REJECT --reject-with icmp-net-unreachable 2>/dev/null || break
+    done
+    while iptables -C FORWARD -i wg0 -o "$WAN_IF" -j ACCEPT 2>/dev/null; do
+        iptables -D FORWARD -i wg0 -o "$WAN_IF" -j ACCEPT 2>/dev/null || break
+    done
+    while iptables -C FORWARD -i "$WAN_IF" -o wg0 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null; do
+        iptables -D FORWARD -i "$WAN_IF" -o wg0 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || break
+    done
+}
+
+# Ожидаемый режим по текущему состоянию системы.
+desired_mode() {
+    if config_exists; then echo "chain"; else echo "direct"; fi
+}
+
+# Проверяет, стоят ли правила заявленного режима.
+mode_rules_ok() {
+    [ -z "$WAN_IF" ] && return 0
+    case "$1" in
+        direct)
+            iptables -C FORWARD -i wg0 -o "$WAN_IF" -j ACCEPT 2>/dev/null
+            ;;
+        chain)
+            iptables -C FORWARD -i wg0 -o "$INTERFACE" -j ACCEPT 2>/dev/null || return 1
+            if killswitch_enabled; then
+                iptables -C FORWARD -i wg0 -o "$WAN_IF" -j REJECT --reject-with icmp-net-unreachable 2>/dev/null
+            else
+                return 0
+            fi
+            ;;
+    esac
+}
+
+apply_forward_mode() {
+    local mode="$1"
     if ! iptables_available; then
-        log "ERR" "iptables не найден — Kill Switch НЕ работает, возможна утечка IP"
+        log "ERR" "iptables не найден — правила FORWARD не настроены"
         return 1
     fi
     if [ -z "$WAN_IF" ]; then
-        log "ERR" "WAN-интерфейс не определён — Kill Switch НЕ работает, возможна утечка IP"
+        log "ERR" "WAN-интерфейс не определён — правила FORWARD не настроены"
         return 1
     fi
+
     iptables -N WGPLUS_BYPASS 2>/dev/null || true
+    clear_forward_rules
 
-    # Снимаем свои правила перед добавлением — иначе при повторном вызове
-    # они задвоятся, а REJECT окажется не последним.
-    iptables -D FORWARD -i wg0 -o "$INTERFACE" -j ACCEPT 2>/dev/null || true
-    iptables -D FORWARD -i "$INTERFACE" -o wg0 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
-    iptables -D FORWARD -i wg0 -j WGPLUS_BYPASS 2>/dev/null || true
-    iptables -D FORWARD -i wg0 -o "$WAN_IF" -j REJECT --reject-with icmp-net-unreachable 2>/dev/null || true
+    if [ "$mode" = "direct" ]; then
+        # Обычный WireGuard-сервер: выход через NIC.
+        iptables -A FORWARD -i wg0 -o "$WAN_IF" -j ACCEPT
+        iptables -A FORWARD -i "$WAN_IF" -o wg0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+        log "OK" "Режим: прямой выход через ${WAN_IF} (второго конфига нет)"
+        log_event mode_direct
+    else
+        # Цепочка: только через wg1.
+        iptables -A FORWARD -i wg0 -o "$INTERFACE" -j ACCEPT
+        iptables -A FORWARD -i "$INTERFACE" -o wg0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+        iptables -A FORWARD -i wg0 -j WGPLUS_BYPASS
+        if killswitch_enabled; then
+            iptables -A FORWARD -i wg0 -o "$WAN_IF" -j REJECT --reject-with icmp-net-unreachable
+            log "OK" "Режим: цепочка через ${INTERFACE}, выход мимо VPN закрыт"
+        else
+            iptables -A FORWARD -i wg0 -o "$WAN_IF" -j ACCEPT
+            iptables -A FORWARD -i "$WAN_IF" -o wg0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+            log "WARN" "Режим: цепочка, но Kill Switch выключён — при падении ${INTERFACE} возможна утечка IP"
+        fi
+        log_event mode_chain
+    fi
 
-    iptables -A FORWARD -i wg0 -o "$INTERFACE" -j ACCEPT
-    iptables -A FORWARD -i "$INTERFACE" -o wg0 -m state --state RELATED,ESTABLISHED -j ACCEPT
-    iptables -A FORWARD -i wg0 -j WGPLUS_BYPASS
-    iptables -A FORWARD -i wg0 -o "$WAN_IF" -j REJECT --reject-with icmp-net-unreachable
-
+    CURRENT_MODE="$mode"
     iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+    BYPASS_HASH=""   # цепочку обхода пересоберём
     return 0
 }
 
-remove_killswitch() {
-    [ -z "$WAN_IF" ] && return 0
-    iptables -D FORWARD -i wg0 -o "$WAN_IF" -j REJECT --reject-with icmp-net-unreachable 2>/dev/null || true
-    iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
-}
-
-# Проверка целостности + self-heal. Правила может снести сторонний софт,
-# iptables -F или перезапуск networking.
-check_killswitch() {
-    local now
+# Проверка каждые 15с: сменился ли режим или снесли ли правила.
+check_forward_mode() {
+    iptables_available || return 0
+    local now want
     now=$(date +%s)
     [ $((now - LAST_KS_CHECK)) -lt 15 ] && return 0
     LAST_KS_CHECK=$now
-    iptables_available || return 0
     [ -z "$WAN_IF" ] && return 0
 
-    if ! killswitch_enabled; then
-        # Выключён в настройках — снимаем REJECT, если он остался.
-        if iptables -C FORWARD -i wg0 -o "$WAN_IF" -j REJECT --reject-with icmp-net-unreachable 2>/dev/null; then
-            log "INFO" "Kill Switch отключён в настройках — снимаю правило"
-            remove_killswitch
-        fi
-        return 0
-    fi
-
-    if ! iptables -C FORWARD -i wg0 -o "$WAN_IF" -j REJECT --reject-with icmp-net-unreachable 2>/dev/null \
-       || ! iptables -C FORWARD -i wg0 -o "$INTERFACE" -j ACCEPT 2>/dev/null; then
-        log "WARN" "Kill Switch потерян — восстанавливаю"
-        if apply_killswitch; then
-            log "OK" "Kill Switch восстановлен"
-            log_event killswitch_restored
-            BYPASS_HASH=""   # цепочку тоже пересоберём
-        fi
+    want=$(desired_mode)
+    if [ "$want" != "$CURRENT_MODE" ]; then
+        log "INFO" "Смена режима: ${CURRENT_MODE:-неизвестен} -> ${want}"
+        apply_forward_mode "$want"
+    elif ! mode_rules_ok "$want"; then
+        log "WARN" "Правила FORWARD для режима '${want}' потеряны — восстанавливаю"
+        apply_forward_mode "$want"
+        log_event forward_rules_restored "$want"
     fi
 }
 
@@ -540,7 +588,7 @@ do_recovery() {
 
 main_loop() {
     COOLDOWN=0; COOLDOWN_UNTIL=0; LAST_OK=0; LAST_RELOAD=0
-    LAST_KS_CHECK=0; LAST_BYPASS_SYNC=0; BYPASS_HASH=""; LAST_ACCESS_CHECK=0
+    LAST_KS_CHECK=0; LAST_BYPASS_SYNC=0; BYPASS_HASH=""; LAST_ACCESS_CHECK=0; CURRENT_MODE=""
     WAN_STATE="ok"; WAN_DOWN_SINCE=0; vpn_ok=0
 
     mkdir -p "$LOG_DIR" 2>/dev/null
@@ -552,19 +600,8 @@ main_loop() {
     # Kill Switch выставляем СРАЗУ на старте, до warmup: если туннель после
     # загрузки не поднимется, трафик клиентов не должен утечь наружу
     # в этот промежуток.
-    if killswitch_enabled; then
-        if apply_killswitch; then
-            log "OK" "Kill Switch активен (выход только через ${INTERFACE})"
-        else
-            # Раньше здесь был `apply_killswitch && log ...` — при отказе не писалось
-            # НИЧЕГО. Защитная функция не должна отказывать молча — иначе
-            # админ уверен, что защита есть, а её нет.
-            log "CRIT" "Не удалось включить Kill Switch — трафик клиентов может уйти мимо VPN"
-            log_event killswitch_failed
-        fi
-    else
-        log "WARN" "Kill Switch отключён в настройках — при падении туннеля возможна утечка IP"
-    fi
+    # Режим выставляем СРАЗУ по факту наличия wg1.conf.
+    apply_forward_mode "$(desired_mode)" || log "CRIT" "Не удалось настроить правила FORWARD"
     sync_bypass
 
     # Доступ к панели проверяем сразу после Kill Switch: если правила
@@ -621,7 +658,10 @@ main_loop() {
         # Во время busy это тоже безопасно: мы трогаем только iptables, а не wg1,
         # так что с операциями панели не конфликтуем. routes.txt панель пишет
         # атомарно (tmp -> rename), поэтому недочитать половину файла нельзя.
-        check_killswitch
+        # Режим маршрутизации и список обхода проверяем ПЕРВЫМ ДЕЛОМ,
+        # до всех выходов из цикла — именно здесь переключение direct <-> chain
+        # после того, как панель залила или удалила wg1.conf.
+        check_forward_mode
         sync_bypass
         ensure_access_rules
 

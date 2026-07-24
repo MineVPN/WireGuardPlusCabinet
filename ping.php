@@ -23,7 +23,6 @@ if (wgp_session_invalid_reason() !== '') {
     http_response_code(403);
     die('Unauthorized');
 }
-$_SESSION['last_activity'] = time();
 
 $host  = trim($_GET['host'] ?? '');
 $ifaceParam = trim($_GET['iface'] ?? '');
