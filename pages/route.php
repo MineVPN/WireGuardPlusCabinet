@@ -3,7 +3,7 @@
  * WGPlus — страница «Обход VPN».
  *
  * Адреса из этого списка идут напрямую через сервер, минуя туннель
- * провайдера. Правило применяется сразу и дублируется в wg0.conf,
+ * второго впн. Правило применяется сразу и дублируется в wg0.conf,
  * чтобы пережить перезагрузку.
  */
 
@@ -90,7 +90,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_ip'])) {
         } else {
             exec('sudo ip rule add to ' . escapeshellarg($ip) . " table main preference $pref");
             wgp_addBypass($ip, $pref, $wg0Conf);
-            wgp_log('OK', "Добавлен обход VPN для $ip");
+            wgp_log('OK', "Добавлен обход второго впн для $ip");
             header('Location: cabinet.php?menu=route'); exit();
         }
     }
@@ -110,7 +110,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_ip'])) {
             $notice = 'Правило снято, но список не сохранён. Проверьте права на ' . WGP_DATA_DIR;
             $noticeKind = 'err';
         } else {
-            wgp_log('OK', "Убран обход VPN для $ip");
+            wgp_log('OK', "Убран обход второго впн для $ip");
             header('Location: cabinet.php?menu=route'); exit();
         }
     }
@@ -124,8 +124,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_ip'])) {
 <div class="page-head">
   <div class="page-head__title"><h1>Обход VPN</h1></div>
   <p class="page-head__note">
-    Трафик на эти адреса пойдёт напрямую через сервер, минуя туннель провайдера.
-    Обычно сюда добавляют банки и сервисы, которые блокируют доступ из чужой страны.
+    Трафик на эти адреса пойдёт напрямую через промежуточный сервер, минуя туннель второго впн.
+    Обычно сюда добавляют телефонии и другие сервисы, которым нужна минимальная задержка.
   </p>
 </div>
 
@@ -155,7 +155,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_ip'])) {
 
     <?php if (!$routes): ?>
       <div class="empty">
-        Пока пусто. Добавьте адрес выше — трафик к нему пойдёт мимо туннеля.
+        Пока пусто. Добавьте адрес выше — трафик к нему пойдёт мимо второго впн.
       </div>
     <?php else: ?>
       <div class="items">

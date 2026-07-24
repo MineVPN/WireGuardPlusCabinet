@@ -1,6 +1,6 @@
 <?php
 /**
- * WGPlus — каркас панели: боковое меню + рабочая область.
+ * WireGuard+ — каркас панели: боковое меню + рабочая область.
  *
  * Хелперы подключаются ДО session_start(): в них выставляются параметры
  * cookie сессии, после старта их уже не применить.
@@ -26,10 +26,11 @@ if (isset($_POST['menu'])) {
 }
 
 $pages = [
-    'tunnel' => ['file' => 'pages/tunnel.php', 'title' => 'Туннель'],
+    'tunnel' => ['file' => 'pages/tunnel.php', 'title' => 'Подключение'],
     'route'  => ['file' => 'pages/route.php',  'title' => 'Обход VPN'],
     'ping'   => ['file' => 'pages/ping.php',   'title' => 'Пинг'],
     'logs'   => ['file' => 'pages/logs.php',   'title' => 'События'],
+    'help'   => ['file' => 'pages/help.php',   'title' => 'Инструкция'],
 ];
 
 $menu = $_GET['menu'] ?? 'tunnel';
@@ -45,9 +46,14 @@ function nav_item(string $key, string $current, string $title, string $icon): vo
 }
 
 $icoTunnel = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h4"/><path d="M16 12h4"/><circle cx="12" cy="12" r="3.2"/></svg>';
-$icoRoute  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="18" r="2.4"/><circle cx="18" cy="6" r="2.4"/><path d="M8.4 18H14a4 4 0 0 0 0-8H9"/></svg>';
+// Иконка обхода: поток раздваивается на два пути со стрелками —
+// часть трафика идёт мимо туннеля. Прежняя из двух кружков и дуги
+// не читалась: линии не сходились и выглядели оборванными.
+$icoRoute  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h4c3.5 0 4.5 10 8 10h3"/><path d="M3 17h4c1.6 0 2.6-2 3.4-4"/><path d="M15 4l3 3-3 3"/><path d="M15 14l3 3-3 3"/></svg>';
 $icoPing   = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5-6 5 12L17 12h4"/></svg>';
 $icoLogs   = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14v16H5z"/><path d="M9 9h6M9 13h6M9 17h3"/></svg>';
+// Инструкция — знак вопроса в круге: узнаваемый символ помощи.
+$icoHelp   = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.2 9.3a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4.2"/><path d="M12 17.5h.01"/></svg>';
 $icoExit   = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 17l5-5-5-5"/><path d="M20 12H9"/><path d="M12 20H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h6"/></svg>';
 ?>
 <!DOCTYPE html>
@@ -55,7 +61,7 @@ $icoExit   = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title><?= htmlspecialchars($pages[$menu]['title']) ?> — WGPlus</title>
+<title><?= htmlspecialchars($pages[$menu]['title']) ?> — WireGuard+</title>
 <link rel="icon" type="image/png" href="assets/img/favicon.png">
 <link rel="stylesheet" href="assets/css/tokens.css?v=<?= $v ?>">
 <link rel="stylesheet" href="assets/css/base.css?v=<?= $v ?>">
@@ -69,16 +75,17 @@ $icoExit   = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-
     <a class="side__brand" href="cabinet.php">
       <img class="side__logo" src="assets/img/logo.png" alt="">
       <span>
-        <span class="side__name">WGPlus</span><br>
-        <span class="side__sub">цепочка туннелей</span>
+        <span class="side__name">WireGuard+</span><br>
+        <span class="side__sub">двойной впн</span>
       </span>
     </a>
     <nav class="side__nav">
       <?php
-        nav_item('tunnel', $menu, 'Туннель',   $icoTunnel);
-        nav_item('route',  $menu, 'Обход VPN', $icoRoute);
-        nav_item('ping',   $menu, 'Пинг',      $icoPing);
-        nav_item('logs',   $menu, 'События',   $icoLogs);
+        nav_item('tunnel', $menu, 'Подключение', $icoTunnel);
+        nav_item('route',  $menu, 'Обход VPN',   $icoRoute);
+        nav_item('ping',   $menu, 'Пинг',        $icoPing);
+        nav_item('logs',   $menu, 'События',     $icoLogs);
+        nav_item('help',   $menu, 'Инструкция',  $icoHelp);
       ?>
     </nav>
 

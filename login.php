@@ -1,6 +1,6 @@
 <?php
 /**
- * WGPlus — вход в панель.
+ * WireGuard+ — вход в панель.
  *
  * Обработка POST идёт ДО вывода HTML: иначе session_start() и header()
  * срабатывают после начала вывода и редирект приходится делать скриптом.
@@ -88,7 +88,7 @@ $v = '2.1';
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Вход — WGPlus</title>
+<title>Вход — WireGuard+</title>
 <link rel="icon" type="image/png" href="assets/img/favicon.png">
 <link rel="stylesheet" href="assets/css/tokens.css?v=<?= $v ?>">
 <link rel="stylesheet" href="assets/css/base.css?v=<?= $v ?>">
@@ -99,8 +99,8 @@ $v = '2.1';
 <div class="auth">
   <div class="auth__card">
     <img class="auth__logo" src="assets/img/logo.png" alt="">
-    <div class="auth__title">WGPlus</div>
-    <div class="auth__sub">Управление цепочкой туннелей</div>
+    <div class="auth__title">WireGuard+</div>
+    <div class="auth__sub">Двойной впн</div>
 
     <form class="auth__form" method="POST" action="login.php">
       <div class="field">

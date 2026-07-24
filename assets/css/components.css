@@ -461,7 +461,161 @@
 .notice--ok  { background: var(--ok-dim);  border-color: var(--ok-line);  color: var(--ok); }
 .notice--err { background: var(--err-dim); border-color: var(--err-line); color: var(--err); }
 
-/* ── Страница входа ───────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════════
+   ИНСТРУКЦИЯ
+   ══════════════════════════════════════════════════════════════ */
+
+/* Схема пути трафика. Главная картинка страницы: человек должен
+   с одного взгляда понять, зачем нужен промежуточный сервер. */
+.flow {
+  display: flex;
+  align-items: stretch;
+  gap: var(--s-2);
+  padding: var(--s-5) var(--s-4);
+  background: var(--bg-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  overflow-x: auto;
+}
+
+.flow__node {
+  flex: 1 1 0;
+  min-width: 128px;
+  text-align: center;
+  padding: var(--s-3) var(--s-2);
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+}
+
+.flow__node--accent { border-color: var(--accent-line); background: var(--accent-dim); }
+
+.flow__icon { font-size: 22px; line-height: 1.2; }
+.flow__name { font-weight: 650; font-size: var(--fs-sm); margin-top: var(--s-1); }
+.flow__sub  { font-size: var(--fs-xs); color: var(--text-faint); line-height: 1.35; }
+
+.flow__arrow {
+  flex: 0 0 auto;
+  align-self: center;
+  color: var(--text-faint);
+  font-size: 18px;
+}
+
+@media (max-width: 760px) {
+  .flow { flex-direction: column; }
+  .flow__arrow { transform: rotate(90deg); }
+}
+
+/* Нумерованные шаги. Номер крупный слева — видно, сколько всего
+   действий и на каком человек сейчас. */
+.steps { display: flex; flex-direction: column; gap: var(--s-5); }
+
+.step {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: var(--s-4);
+  align-items: start;
+}
+
+.step__num {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-line);
+  color: var(--accent-hi);
+  font-weight: 700;
+  font-size: var(--fs-md);
+  font-family: var(--font-data);
+}
+
+.step__title { font-size: var(--fs-md); font-weight: 650; margin-bottom: var(--s-2); }
+.step__body  { color: var(--text-dim); line-height: 1.65; }
+.step__body p { margin-bottom: var(--s-2); }
+.step__body strong { color: var(--text); font-weight: 600; }
+
+@media (max-width: 560px) {
+  .step { grid-template-columns: 32px minmax(0, 1fr); gap: var(--s-3); }
+  .step__num { width: 32px; height: 32px; font-size: var(--fs-sm); }
+}
+
+/* Маркированный список внутри инструкции. */
+.bullets { display: flex; flex-direction: column; gap: var(--s-3); }
+
+.bullet {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: var(--s-3);
+  align-items: start;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+.bullet__mark { font-size: var(--fs-md); line-height: 1.4; }
+
+/* Выделенный блок — то, что человек обязан прочитать. */
+.callout {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: var(--s-3);
+  padding: var(--s-4) var(--s-5);
+  border-radius: var(--r-md);
+  border: 1px solid;
+  line-height: 1.6;
+}
+
+.callout__mark { font-size: var(--fs-md); line-height: 1.4; }
+.callout--warn { background: var(--warn-dim); border-color: var(--warn-line); color: var(--text); }
+.callout--info { background: var(--accent-dim); border-color: var(--accent-line); color: var(--text); }
+.callout--ok   { background: var(--ok-dim);   border-color: var(--ok-line);   color: var(--text); }
+
+/* Вопрос-ответ для раздела «если не работает». */
+.qa { display: flex; flex-direction: column; gap: var(--s-2); }
+
+.qa__item {
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  padding: var(--s-4) var(--s-5);
+}
+
+.qa__q {
+  font-weight: 650;
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+}
+
+.qa__q::-webkit-details-marker { display: none; }
+.qa__q::before { content: "+"; color: var(--accent-hi); font-family: var(--font-data); font-size: var(--fs-md); }
+.qa__item[open] .qa__q::before { content: "−"; }
+
+.qa__a {
+  color: var(--text-dim);
+  line-height: 1.65;
+  margin-top: var(--s-3);
+  padding-left: calc(var(--s-3) + 10px);
+}
+
+/* Путь к файлу или команда внутри текста. */
+code {
+  font-family: var(--font-data);
+  font-size: 0.92em;
+  background: var(--bg);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  padding: 1px 6px;
+  color: var(--accent-hi);
+  word-break: break-all;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   СТРАНИЦА ВХОДА
+   ══════════════════════════════════════════════════════════════ */
 
 .auth {
   min-height: 100vh;

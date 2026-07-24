@@ -67,6 +67,10 @@ if (!defined('WGP_WG1_BAK'))    define('WGP_WG1_BAK',    '/etc/wireguard/wg1.con
 if (!defined('WGP_DATA_DIR'))   define('WGP_DATA_DIR',   '/var/www/wgplus');
 if (!defined('WGP_STATE_FILE')) define('WGP_STATE_FILE', WGP_DATA_DIR . '/state');
 if (!defined('WGP_ROUTES_FILE'))define('WGP_ROUTES_FILE', WGP_DATA_DIR . '/routes.txt');
+// Настройки лежат в том же каталоге: атомарная запись (tmp -> rename)
+// требует права на КАТАЛОГ. Раньше файл лежал в /var/www (root:root 755) —
+// www-data мог писать в сам файл, но не создать *.tmp рядом.
+if (!defined('WGP_SETTINGS_FILE')) define('WGP_SETTINGS_FILE', WGP_DATA_DIR . '/settings');
 if (!defined('WGP_TABLE_ID'))   define('WGP_TABLE_ID',   '120');
 if (!defined('WGP_LOG_DIR'))    define('WGP_LOG_DIR',    '/var/log/wgplus');
 // ОДИН журнал на всю систему. Раньше было три файла
@@ -377,6 +381,36 @@ function wgp_state_set(string $state): bool {
 // ══════════════════════════════════════════════════════════════════
 // ЛОГИРОВАНИЕ
 // ══════════════════════════════════════════════════════════════════
+
+/**
+ * Включён ли Kill Switch — блокировка интернета при падении второго впн.
+ *
+ * По умолчанию ВЫКЛЮЧЕН: если второй впн ляжет, клиенты продолжат
+ * работать через этот сервер. Остаться без интернета вообще хуже для
+ * большинства сценариев, чем временно выйти с другого адреса.
+ */
+function wgp_killswitch_on(): bool {
+    if (!is_readable(WGP_SETTINGS_FILE)) return false;
+    $raw = (string) @file_get_contents(WGP_SETTINGS_FILE);
+    return preg_match('/^killswitch=true$/m', $raw) === 1;
+}
+
+/** Атомарно сохраняет настройку. Демон подхватит её в течение 15 секунд. */
+function wgp_killswitch_set(bool $on): bool {
+    $tmp = WGP_SETTINGS_FILE . '.tmp';
+    $val = $on ? 'true' : 'false';
+    if (@file_put_contents($tmp, "killswitch={$val}\n") === false) {
+        wgp_log('ERR', 'Не удалось записать настройки — проверьте права на ' . WGP_DATA_DIR);
+        return false;
+    }
+    if (!@rename($tmp, WGP_SETTINGS_FILE)) {
+        @unlink($tmp);
+        wgp_log('ERR', 'Не удалось обновить ' . WGP_SETTINGS_FILE);
+        return false;
+    }
+    @chmod(WGP_SETTINGS_FILE, 0664);
+    return true;
+}
 
 /** Ротация: при превышении лимита оставляем последние WGP_LOG_KEEP строк. */
 function wgp_rotate(string $file): void {

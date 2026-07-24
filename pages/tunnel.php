@@ -45,11 +45,22 @@ function wgp_prepare_config(string $raw, array $net): string {
 
     $tbl    = WGP_TABLE_ID;
     $cidr   = $net['cidr'];
+
+    // ИДЕМПОТЕНТНЫЕ PostUp — вторая линия обороны.
+    //
+    // 'ip rule add' падает с "File exists", если правило уже есть — а wg-quick
+    // работает с set -e и обрывается на первой же ошибке. Любой остаток от
+    // прошлой установки делал загрузку даже рабочего конфига невозможной.
+    //
+    // Сначала чистим (если есть), потом добавляем. Для маршрута — 'replace',
+    // она идемпотентна по определению.
+    // '|| true' обязателен: 'ip rule del' без существующего правила — тоже ошибка.
     $inject = "Table = off\n"
-            . "PostUp = ip route add default dev %i table {$tbl}\n"
+            . "PostUp = ip rule del from {$cidr} table {$tbl} preference 32765 2>/dev/null || true\n"
             . "PostUp = ip rule add from {$cidr} table {$tbl} preference 32765\n"
-            . "PostDown = ip rule del from {$cidr} table {$tbl} preference 32765\n"
-            . "PostDown = ip route del default dev %i table {$tbl}";
+            . "PostUp = ip route replace default dev %i table {$tbl}\n"
+            . "PostDown = ip rule del from {$cidr} table {$tbl} preference 32765 2>/dev/null || true\n"
+            . "PostDown = ip route flush table {$tbl} 2>/dev/null || true";
 
     $out = preg_replace('/(\[Interface\]\s*\r?\n)/i', "$1{$inject}\n", $clean, 1);
 
@@ -65,6 +76,54 @@ function wgp_start_tunnel(): bool {
     return wgp_wait_up(10);
 }
 
+/**
+ * Проверяет, не пересекается ли адресация второго впн с подсетью клиентов.
+ *
+ * ЗАЧЕМ: любая адресация второго впн работает — кроме случая, когда она
+ * перекрывается с подсетью наших клиентов. Ядро создаёт connected route
+ * на каждый адрес интерфейса, и в main-таблице появляются ДВА одинаковых
+ * маршрута:
+ *
+ *   10.55.55.0/24 dev wg0   ← наши клиенты
+ *   10.55.55.0/24 dev wg1   ← адрес от второго впн
+ *
+ * Какой из них выберет ядро — вопрос порядка добавления. Сразу после
+ * загрузки обычно выигрывает wg0 и всё работает, но после перезагрузки
+ * или перезапуска порядок может смениться — и клиенты станут недоступны
+ * без понятной причины. Лучше отклонить сразу с объяснением.
+ *
+ * @return string '' если конфликта нет, иначе проблемный адрес
+ */
+function wgp_addr_conflict(string $raw, array $net): string {
+    // Берём все IPv4-адреса из Address — их может быть несколько
+    // через запятую, плюс рядом может стоять IPv6 — его игнорируем.
+    if (!preg_match_all('/^\s*Address\s*=\s*(.+)$/mi', $raw, $lines)) return '';
+
+    $ourNet  = ip2long($net['network']);
+    $ourPfx  = (int) $net['prefix'];
+
+    foreach ($lines[1] as $line) {
+        foreach (explode(',', $line) as $part) {
+            $part = trim($part);
+            if (!preg_match('/^(\d{1,3}(?:\.\d{1,3}){3})(?:\/(\d{1,2}))?$/', $part, $m)) continue;
+
+            $ip  = $m[1];
+            $pfx = isset($m[2]) ? (int) $m[2] : 32;
+            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) continue;
+            if ($pfx < 1 || $pfx > 32) continue;
+
+            // Две сети пересекаются, если под более широкой маской
+            // их адреса сети совпадают.
+            $common = min($pfx, $ourPfx);
+            $mask   = (0xFFFFFFFF << (32 - $common)) & 0xFFFFFFFF;
+            if (((ip2long($ip) & $mask) & 0xFFFFFFFF) === (($ourNet & $mask) & 0xFFFFFFFF)) {
+                return $ip . '/' . $pfx;
+            }
+        }
+    }
+    return '';
+}
+
 // ══════════════════════════════════════════════════════════════
 // ДЕЙСТВИЯ
 // ══════════════════════════════════════════════════════════════
@@ -75,8 +134,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         wgp_state_set('busy');
         wgp_log('INFO', 'Запуск туннеля из панели');
         $ok = wgp_start_tunnel();
-        wgp_state_set($ok ? 'running' : 'stopped');
-        wgp_log($ok ? 'OK' : 'ERR', $ok ? 'Туннель поднят' : 'Туннель не поднялся');
+        // Ставим 'running' даже при неудаче: это НАМЕРЕНИЕ (туннель должен
+        // работать), а не факт. Со статусом 'stopped' демон полностью
+        // устраняется — и если второй VPN был недоступен ровно в эту секунду,
+        // туннель никогда бы не поднялся без повторного нажатия вручную.
+        wgp_state_set('running');
+        wgp_log($ok ? 'OK' : 'WARN', $ok
+            ? 'Туннель поднят'
+            : 'Туннель пока не поднялся — мониторинг продолжит попытки');
         header('Location: cabinet.php?menu=tunnel'); exit();
     }
 
@@ -85,24 +150,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         wgp_log('INFO', 'Перезапуск туннеля из панели');
         wgp_bring_down();
         $ok = wgp_start_tunnel();
-        wgp_state_set($ok ? 'running' : 'stopped');
-        wgp_log($ok ? 'OK' : 'ERR', $ok ? 'Туннель перезапущен' : 'Туннель не поднялся после перезапуска');
+        // Тот же принцип: конфиг на месте и пользователь хочет связь —
+        // значит демон обязан добиваться результата.
+        wgp_state_set('running');
+        wgp_log($ok ? 'OK' : 'WARN', $ok
+            ? 'Туннель перезапущен'
+            : 'Туннель пока не поднялся — мониторинг продолжит попытки');
         header('Location: cabinet.php?menu=tunnel'); exit();
     }
 
     if (isset($_POST['remove'])) {
-        // Сначала снимаем туннель, потом удаляем конфиг.
-        // Порядок важен: демон поднимает туннель только при наличии
-        // конфига — без файла он его уже не воскресит между шагами.
+        // ПОРЯДОК ВАЖЕН: сначала снимаем туннель, ПОТОМ удаляем конфиг.
+        //
+        // wg-quick down ЧИТАЕТ wg1.conf, чтобы узнать свои PostDown. Если
+        // удалить конфиг раньше, он не найдёт файл, PostDown не выполнятся,
+        // и правило 'ip rule from <подсеть> table 120' останется висеть навсегда.
+        // Следующая загрузка конфига тогда падает: PostUp делает 'ip rule add'
+        // → "File exists" → wg-quick работает с set -e и обрывается.
+        //
+        // Раньше конфиг удалялся первым — чтобы демон не воскресил туннель
+        // между шагами. Сейчас это не нужно: флаг busy держит демона в стороне.
         wgp_state_set('busy');
-        wgp_log('INFO', 'Отключение и удаление конфига провайдера');
+        wgp_log('INFO', 'Отключение и удаление конфига второго VPN');
+
+        // 1. Снимаем туннель, пока конфиг НА МЕСТЕ — PostDown отработает
+        //    и сам уберёт правила маршрутизации.
+        $down = wgp_bring_down();
+
+        // 2. Теперь убираем автозапуск и сам конфиг.
         shell_exec('sudo systemctl disable wg-quick@wg1 2>&1');
-        shell_exec('sudo systemctl stop wg-quick@wg1 2>&1');
         if (file_exists(WGP_WG1_CONF)) {
             @copy(WGP_WG1_CONF, WGP_WG1_BAK);
             shell_exec('sudo rm /etc/wireguard/wg1.conf 2>&1');
         }
-        $down = wgp_bring_down();
+
         wgp_state_set('stopped');
         wgp_log($down ? 'OK' : 'ERR', $down
             ? 'Конфиг удалён, туннель снят. Клиенты выходят напрямую через сервер'
@@ -129,11 +210,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 || !preg_match('/^\s*PrivateKey\s*=/mi', $raw)) {
                 $notice = 'Это не конфиг WireGuard: нет секции [Interface] или PrivateKey';
                 $noticeKind = 'err';
-                wgp_log('WARN', 'Отклонён невалидный конфиг провайдера');
+                wgp_log('WARN', 'Отклонён невалидный впн конфиг');
+
+            } elseif (($bad = wgp_addr_conflict($raw, $net)) !== '') {
+                // Ловим ДО записи: иначе туннель поднимется и будет работать,
+                // а сломается позже — после перезагрузки, без видимой связи с конфигом.
+                $notice = 'Конфиг не подходит: адрес ' . htmlspecialchars($bad)
+                        . ' пересекается с подсетью ваших клиентов ' . htmlspecialchars($net['cidr'])
+                        . '. Попросите у продавца второго впн конфиг с другой адресацией.';
+                $noticeKind = 'err';
+                wgp_log('WARN', "Отклонён впн конфиг: адрес $bad пересекается с подсетью клиентов " . $net['cidr']);
 
             } else {
                 wgp_state_set('busy');
-                wgp_log('INFO', 'Установка конфига провайдера, подсеть цепочки ' . $net['cidr']);
+                wgp_log('INFO', 'Установка впн конфига, подсеть клиентов ' . $net['cidr']);
 
                 $hadPrevious = file_exists(WGP_WG1_CONF);
                 if ($hadPrevious) @copy(WGP_WG1_CONF, WGP_WG1_BAK);
@@ -145,7 +235,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     wgp_state_set('stopped');
                     $notice = 'Не удалось записать конфиг. Проверьте права на /etc/wireguard/';
                     $noticeKind = 'err';
-                    wgp_log('ERR', 'Не удалось записать конфиг провайдера');
+                    wgp_log('ERR', 'Не удалось записать впн конфиг');
 
                 } else {
                     @chmod(WGP_WG1_CONF, 0660);
@@ -157,19 +247,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     if (wgp_start_tunnel()) {
                         wgp_state_set('running');
-                        wgp_log('OK', 'Конфиг провайдера установлен, туннель поднят');
+                        wgp_log('OK', 'Впн конфиг установлен, туннель поднят');
                         header('Location: cabinet.php?menu=tunnel'); exit();
                     }
 
                     // Откат: новый конфиг не поднялся.
-                    wgp_log('ERR', 'Новый конфиг провайдера не поднялся');
+                    wgp_log('ERR', 'Новый впн конфиг не поднялся');
                     wgp_bring_down();
 
                     if ($hadPrevious && file_exists(WGP_WG1_BAK)) {
                         @copy(WGP_WG1_BAK, WGP_WG1_CONF);
                         @chmod(WGP_WG1_CONF, 0660);
                         $back = wgp_start_tunnel();
-                        wgp_state_set($back ? 'running' : 'stopped');
+                        // Конфиг на месте — значит демон должен продолжать попытки,
+                        // даже если откат с первого раза не сработал.
+                        wgp_state_set('running');
                         wgp_log($back ? 'OK' : 'ERR', $back
                             ? 'Вернули предыдущий рабочий конфиг'
                             : 'Откат не помог, туннель не поднимается');
@@ -179,7 +271,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     } else {
                         if (file_exists(WGP_WG1_CONF)) shell_exec('sudo rm /etc/wireguard/wg1.conf 2>&1');
                         wgp_state_set('stopped');
-                        $notice = 'Туннель не поднялся. Проверьте Endpoint, ключи и доступность провайдера';
+                        $notice = 'Туннель не поднялся. Проверьте Endpoint, ключи и доступность второго впн';
                     }
                     $noticeKind = 'err';
                 }
@@ -199,16 +291,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // ── Состояние для отрисовки ────────────────────────────────────
 if (!$hasConfig) {
     $stateKind = 'off';
-    $stateText = 'Конфиг не загружен';
-    $stateNote = 'Сейчас сервер работает как обычный WireGuard. Клиенты выходят в интернет с адреса самого сервера.';
+    $stateText = 'Не настроено';
+    $stateNote = 'Сейчас сервер работает как обычный WireGuard. Клиенты выходят в интернет с адреса самого сервера. Загрузите впн конфиг, чтобы включить двойной впн.';
 } elseif ($up) {
     $stateKind = 'ok';
     $stateText = 'Подключено';
-    $stateNote = 'Трафик клиентов идёт через провайдера. Выход мимо туннеля закрыт.';
+    $stateNote = 'Трафик клиентов идёт через второй впн. Выход мимо туннеля закрыт.';
 } else {
     $stateKind = 'err';
-    $stateText = 'Туннель не поднят';
-    $stateNote = 'Конфиг есть, но туннель лежит. Интернета у клиентов сейчас нет — иначе трафик пошёл бы с адреса сервера.';
+    $stateText = 'Нет связи';
+    $stateNote = 'Впн конфиг загружен, но соединение не установлено. Интернета у клиентов сейчас нет — иначе трафик пошёл бы с адреса сервера.';
 }
 ?>
 
@@ -218,7 +310,7 @@ if (!$hasConfig) {
 
 <div class="page-head">
   <div class="page-head__title">
-    <h1>Туннель</h1>
+    <h1>Подключение</h1>
     <span class="badge badge--<?= $stateKind ?>"><?= htmlspecialchars($stateText) ?></span>
   </div>
   <p class="page-head__note"><?= htmlspecialchars($stateNote) ?></p>
@@ -249,8 +341,8 @@ if (!$hasConfig) {
         <span class="fact__v"><?= $port !== '' ? htmlspecialchars($port) : '—' ?></span>
       </div>
       <div class="fact">
-        <span class="fact__k">Интерфейс wg1</span>
-        <span class="fact__v"><?= $up ? 'поднят' : 'снят' ?></span>
+        <span class="fact__k">Соединение</span>
+        <span class="fact__v"><?= $up ? 'активно' : 'нет' ?></span>
       </div>
       <div class="fact">
         <span class="fact__k">Подсеть клиентов</span>
@@ -271,7 +363,7 @@ if (!$hasConfig) {
           <button type="submit" name="restart" class="btn btn--block">Переподключить</button>
         <?php endif; ?>
         <button type="submit" name="remove" class="btn btn--danger btn--block"
-                onclick="return confirm('Отключить туннель и удалить конфиг провайдера?')">
+                onclick="return confirm('Отключить туннель и удалить впн конфиг?')">
           Отключить и удалить конфиг
         </button>
       <?php endif; ?>

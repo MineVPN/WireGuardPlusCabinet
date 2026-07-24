@@ -30,7 +30,7 @@ TABLE_ID="120"
 STATE_FILE="/var/www/wgplus/state"
 NIC_FILE="/var/www/html/NIC.txt"
 ROUTES_FILE="/var/www/wgplus/routes.txt"
-SETTINGS_FILE="/var/www/wgplus-settings"
+SETTINGS_FILE="/var/www/wgplus/settings"
 PANEL_PORT=8998          # адрес из lk.txt должен работать ВСЕГДА
 SSH_PORT=22
 LOG_DIR="/var/log/wgplus"
@@ -42,15 +42,15 @@ MAX_LOG=2097152          # 2 MB
 KEEP_LINES=1500
 
 PING_HOSTS=("8.8.8.8" "1.1.1.1" "9.9.9.9")
-PING_TIMEOUT=2
-CHECK_INTERVAL=5
-HANDSHAKE_MAX_AGE=180
-POLL_MAX=15
-WARMUP_TIMEOUT=90
-COOLDOWN_INITIAL=15
-COOLDOWN_MAX=120
-BUSY_STALE=180
+PING_TIMEOUT=2           # таймаут одного ping (с)
+CHECK_INTERVAL=5         # период цикла — связь проверяется каждые 5с
+POLL_MAX=10              # макс ожидание подъёма после перезапуска (с)
+WARMUP_TIMEOUT=120       # ждём стабилизации после старта (с)
+COOLDOWN_INITIAL=10      # начальная пауза между попытками (с)
+COOLDOWN_MAX=60          # потолок паузы (с)
+BUSY_STALE=180           # если панель забыла снять busy (с)
 RELOAD_INTERVAL=300      # перечитывание WAN и подсети wg0
+DOWN_DEDUP=300           # одну и ту же причину не повторяем чаще (с)
 
 # Значения по умолчанию — перезаписываются load_wg0_net()
 WG0_GW="10.55.55.1"
@@ -202,16 +202,40 @@ ping_wan() {
     ping_via "$WAN_IF"
 }
 
-# Свежий handshake — самый надёжный признак живого WireGuard: не зависит
-# ни от маршрутов, ни от policy routing. На простаивающем туннеле handshake
-# стареет, поэтому "не свежий" != "мёртв" — это лишь повод проверить пингом.
-handshake_fresh() {
-    local hs now age
+# Возраст последнего handshake в секундах (-1 если его не было).
+#
+# Только для диагностики — показать в журнале, как давно туннель молчит.
+# Раньше свежий handshake считался достаточным доказательством жизни,
+# и ping не делался вовсе. Но WireGuard обновляет handshake раз в ~2 минуты —
+# значит упавший туннель выглядел живым до 3 минут.
+handshake_age() {
+    local hs now
     hs=$(wg show "$INTERFACE" latest-handshakes 2>/dev/null | awk '{print $2}' | sort -rn | head -1)
-    [ -z "$hs" ] || [ "$hs" = "0" ] && return 1
+    if [ -z "$hs" ] || [ "$hs" = "0" ]; then echo "-1"; return 1; fi
     now=$(date +%s)
-    age=$((now - hs))
-    [ "$age" -lt "$HANDSHAKE_MAX_AGE" ]
+    echo $((now - hs))
+}
+
+# Связь через туннель: ping с адреса шлюза — тот же путь, что у клиентов.
+ping_tunnel() { ping_via "$WG0_GW"; }
+
+# Запись причины падения без спама: одна и та же причина попадает
+# в журнал не чаще раза в DOWN_DEDUP секунд. Без этого при длительной
+# аварии журнал забивается одной строкой каждые 5 секунд.
+note_down() {
+    local reason="$1" now age
+    now=$(date +%s)
+    if [ "$reason" = "$LAST_DOWN_REASON" ] && [ $((now - LAST_DOWN_AT)) -lt "$DOWN_DEDUP" ]; then
+        return 0
+    fi
+    LAST_DOWN_REASON="$reason"
+    LAST_DOWN_AT=$now
+    age=$(handshake_age)
+    if [ "$age" -ge 0 ] 2>/dev/null; then
+        log "WARN" "Туннель не работает: ${reason} (последний отклик ${age}с назад)"
+    else
+        log "WARN" "Туннель не работает: ${reason} (связи с узлом не было вовсе)"
+    fi
 }
 
 has_chain_rule() {
@@ -298,8 +322,7 @@ tunnel_alive() {
     iface_exists || return 1
     iface_has_ip || return 1
     has_chain_route || return 1
-    handshake_fresh && return 0
-    ping_via "$WG0_GW"
+    ping_tunnel
 }
 
 # ═══════════════════════════════════════════════════════
@@ -324,9 +347,12 @@ tunnel_alive() {
 # а режим переключается сам в течение 5 секунд.
 
 killswitch_enabled() {
-    # По умолчанию включён: отсутствие файла настроек не должно означать утечку.
-    [ -f "$SETTINGS_FILE" ] || return 0
-    ! grep -q '^killswitch=false$' "$SETTINGS_FILE"
+    # По умолчанию ВЫКЛЮЧЕН: если второй впн ляжет, клиенты продолжат
+    # работать через этот сервер. Остаться без интернета вообще хуже
+    # для большинства сценариев, чем временно выйти с другого адреса.
+    # Включается переключателем в панели на странице «Подключение».
+    [ -f "$SETTINGS_FILE" ] || return 1
+    grep -q '^killswitch=true$' "$SETTINGS_FILE"
 }
 
 # Без iptables все нижеследующие вызовы молча провалятся (у них 2>/dev/null).
@@ -408,11 +434,11 @@ apply_forward_mode() {
         iptables -A FORWARD -i wg0 -j WGPLUS_BYPASS
         if killswitch_enabled; then
             iptables -A FORWARD -i wg0 -o "$WAN_IF" -j REJECT --reject-with icmp-net-unreachable
-            log "OK" "Режим: цепочка через ${INTERFACE}, выход мимо VPN закрыт"
+            log "OK" "Режим: весь трафик через ${INTERFACE}, аварийный выход закрыт (Kill Switch)"
         else
             iptables -A FORWARD -i wg0 -o "$WAN_IF" -j ACCEPT
             iptables -A FORWARD -i "$WAN_IF" -o wg0 -m state --state RELATED,ESTABLISHED -j ACCEPT
-            log "WARN" "Режим: цепочка, но Kill Switch выключён — при падении ${INTERFACE} возможна утечка IP"
+            log "OK" "Режим: весь трафик через ${INTERFACE}, при его падении — напрямую"
         fi
         log_event mode_chain
     fi
@@ -581,6 +607,7 @@ do_recovery() {
 
 main_loop() {
     COOLDOWN=0; COOLDOWN_UNTIL=0; LAST_OK=0; LAST_RELOAD=0
+    LAST_DOWN_REASON=""; LAST_DOWN_AT=0
     LAST_KS_CHECK=0; LAST_BYPASS_SYNC=0; BYPASS_HASH=""; LAST_ACCESS_CHECK=0; CURRENT_MODE=""
     WAN_STATE="ok"; WAN_DOWN_SINCE=0; vpn_ok=0
 
@@ -690,7 +717,7 @@ main_loop() {
         if [ "$WAN_STATE" = "down" ]; then
             if ping_wan; then
                 local dur=$(( $(date +%s) - WAN_DOWN_SINCE ))
-                log "OK" "Интернет провайдера восстановлен (был недоступен ${dur}с)"
+                log "OK" "Интернет на сервере восстановлен (был недоступен ${dur}с)"
                 log_event isp_restored "${dur}с"
                 WAN_STATE="ok"; COOLDOWN=0; COOLDOWN_UNTIL=0
                 if ! tunnel_alive; then
@@ -703,8 +730,19 @@ main_loop() {
             continue
         fi
 
+        # КАСКАД ПРОВЕРОК — каждая говорит, ЧТО именно сломалось.
+        # Раньше была одна общая проверка — в журнале всегда было "нет связи",
+        # без понимания причины.
         if ! iface_exists; then
-            [ "$vpn_ok" -eq 1 ] && { log "WARN" "Интерфейс ${INTERFACE} пропал"; log_event tunnel_down "интерфейс пропал"; vpn_ok=0; }
+            note_down "интерфейс ${INTERFACE} пропал"
+            vpn_ok=0
+            do_recovery && vpn_ok=1
+            sleep "$CHECK_INTERVAL"; continue
+        fi
+
+        if ! iface_has_ip; then
+            note_down "на интерфейсе нет IP-адреса"
+            vpn_ok=0
             do_recovery && vpn_ok=1
             sleep "$CHECK_INTERVAL"; continue
         fi
@@ -716,17 +754,20 @@ main_loop() {
         # тогда локальное правило не работает, хотя и существует.
         rules_order_ok || fix_rules_order
 
-        if ! tunnel_alive; then
+        # Связь проверяется пингом КАЖДЫЕ 5С — без опоры на handshake.
+        # Две попытки с паузой: одиночная потеря пакета не повод для перезапуска.
+        if ! ping_tunnel; then
             sleep 1
-            if ! tunnel_alive; then
-                # Прежде чем винить VPN — жив ли интернет провайдера?
+            if ! ping_tunnel; then
+                # Прежде чем винить туннель — жив ли интернет самого сервера?
+                # Если лёг интернет самого сервера — туннель не виноват, дёргать его бессмысленно.
                 if ! ping_wan; then
-                    log "WARN" "Интернет провайдера недоступен — VPN не трогаем, ждём"
-                    log_event isp_down
+                    log "WARN" "Интернет на сервере недоступен — туннель не трогаем, ждём"
                     WAN_STATE="down"; WAN_DOWN_SINCE=$(date +%s); vpn_ok=0
                     sleep "$CHECK_INTERVAL"; continue
                 fi
-                [ "$vpn_ok" -eq 1 ] && { log "WARN" "Нет связи через ${INTERFACE}"; log_event tunnel_down "нет связи"; vpn_ok=0; }
+                note_down "нет связи через туннель"
+                vpn_ok=0
                 do_recovery && vpn_ok=1
                 sleep "$CHECK_INTERVAL"; continue
             fi
@@ -734,8 +775,8 @@ main_loop() {
 
         if [ "$vpn_ok" -eq 0 ]; then
             vpn_ok=1; LAST_OK=$(date +%s); COOLDOWN=0; COOLDOWN_UNTIL=0
-            log "OK" "Туннель стабилен"
-            log_event tunnel_up
+            LAST_DOWN_REASON=""; LAST_DOWN_AT=0
+            log "OK" "Туннель работает"
         fi
 
         sleep "$CHECK_INTERVAL"
