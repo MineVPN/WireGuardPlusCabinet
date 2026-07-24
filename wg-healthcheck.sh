@@ -31,6 +31,8 @@ STATE_FILE="/var/www/wg-state"
 NIC_FILE="/var/www/html/NIC.txt"
 ROUTES_FILE="/var/www/html/routes.txt"
 SETTINGS_FILE="/var/www/wgplus-settings"
+PANEL_PORT=8998          # адрес из lk.txt должен работать ВСЕГДА
+SSH_PORT=22
 LOG_DIR="/var/log/wgplus"
 LOG="${LOG_DIR}/health.log"
 EVENTS="${LOG_DIR}/events.log"
@@ -222,6 +224,46 @@ has_chain_rule() {
     ip rule show 2>/dev/null | grep -q "from ${WG0_SUBNET} lookup \(vpnchain\|${TABLE_ID}\)"
 }
 
+# Правило, выводящее локальный трафик подсети из-под цепочки.
+# Без него ответ сервера клиенту (источник = адрес шлюза, он В подсети)
+# попадает под "from <подсеть> table 120" и уходит в wg1. Ломает панель
+# на адресе шлюза, ping шлюза и трафик между клиентами.
+has_local_rule() {
+    ip rule show 2>/dev/null | grep -q "to ${WG0_SUBNET} lookup main"
+}
+
+# Проверка ПОРЯДКА правил, а не только их наличия.
+# Локальное правило ОБЯЗАНО иметь номер МЕНЬШЕ, чем цепочка — иначе оно
+# бесполезно. Такое бывает, если цепочку добавили без preference после
+# локального правила — тогда она получает 99 и перехватывает всё.
+rules_order_ok() {
+    local loc chain
+    loc=$(ip rule show 2>/dev/null | grep "to ${WG0_SUBNET} lookup main" | head -1 | cut -d: -f1)
+    chain=$(ip rule show 2>/dev/null | grep "from ${WG0_SUBNET} lookup \(vpnchain\|${TABLE_ID}\)" | head -1 | cut -d: -f1)
+    [ -z "$loc" ] || [ -z "$chain" ] && return 1
+    [ "$loc" -lt "$chain" ]
+}
+
+# Переставляет правила в правильном порядке.
+fix_rules_order() {
+    log "WARN" "Правила маршрутизации в неверном порядке — переставляю"
+    # Сносим все копии обоих правил (их могло накопиться несколько)
+    while ip rule show 2>/dev/null | grep -q "from ${WG0_SUBNET} lookup \(vpnchain\|${TABLE_ID}\)"; do
+        ip rule del from "$WG0_SUBNET" table "$TABLE_ID" 2>/dev/null || break
+    done
+    while ip rule show 2>/dev/null | grep -q "to ${WG0_SUBNET} lookup main"; do
+        ip rule del to "$WG0_SUBNET" lookup main 2>/dev/null || break
+    done
+    ip rule add to "$WG0_SUBNET" lookup main preference 100 2>/dev/null
+    ip rule add from "$WG0_SUBNET" table "$TABLE_ID" preference 32765 2>/dev/null
+    if rules_order_ok; then
+        log "OK" "Порядок правил восстановлен (100 локальный, 32765 цепочка)"
+        log_event rules_reordered
+    else
+        log "ERR" "Не удалось восстановить порядок правил"
+    fi
+}
+
 has_chain_route() {
     ip route show table "$TABLE_ID" 2>/dev/null | grep -q "^default dev ${INTERFACE}"
 }
@@ -230,9 +272,18 @@ has_chain_route() {
 # рестарт networking) сносят правила из PostUp, а wg-quick их назад не ставит.
 heal_chain() {
     local healed=0
+    # ПОРЯДОК ВАЖЕН: сначала локальное правило (preference 100),
+    # оно должно срабатывать раньше, чем правило цепочки (32765).
+    if ! has_local_rule; then
+        log "WARN" "Потеряно правило 'to ${WG0_SUBNET} lookup main' — восстанавливаю"
+        ip rule add to "$WG0_SUBNET" lookup main preference 100 2>/dev/null && healed=1
+    fi
     if ! has_chain_rule; then
         log "WARN" "Потеряно ip rule (from ${WG0_SUBNET} table ${TABLE_ID}) — восстанавливаю"
-        ip rule add from "$WG0_SUBNET" table "$TABLE_ID" 2>/dev/null && healed=1
+        # preference ЗАДАЁМ ЯВНО: без него ip rule берёт номер на 1 меньше
+        # текущего минимума и окажется ВЫШЕ правила 100 — тогда цепочка
+        # перехватит локальный трафик и сломает панель и связь между клиентами.
+        ip rule add from "$WG0_SUBNET" table "$TABLE_ID" preference 32765 2>/dev/null && healed=1
     fi
     if iface_exists && ! has_chain_route; then
         log "WARN" "Потерян default route в таблице ${TABLE_ID} — восстанавливаю"
@@ -381,6 +432,48 @@ sync_bypass() {
     iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 }
 
+# ГАРАНТИЯ ДОСТУПА к панели, SSH и порту WireGuard.
+#
+# Требование: URL из lk.txt (http://<адрес>:8998) должен работать ВСЕГДА —
+# и когда клиент подключён к VPN, и когда нет.
+#
+# Почему это нужно: apply_killswitch и sync_bypass делают iptables-save в rules.v4.
+# Если в этот момент INPUT-правила окажутся сбиты (iptables -F, чужой
+# скрипт, ошибка админа) — сломанное состояние сохранится навсегда,
+# и доступ к серверу будет потерян до консоли хостера.
+# Проверяем каждые 30с и восстанавливаем.
+ensure_access_rules() {
+    iptables_available || return 0
+    local now
+    now=$(date +%s)
+    [ $((now - LAST_ACCESS_CHECK)) -lt 30 ] && return 0
+    LAST_ACCESS_CHECK=$now
+
+    local changed=0
+
+    if ! iptables -C INPUT -p tcp --dport "$PANEL_PORT" -j ACCEPT 2>/dev/null; then
+        iptables -I INPUT -p tcp --dport "$PANEL_PORT" -j ACCEPT 2>/dev/null && changed=1
+        log "WARN" "Восстановлен доступ к панели (tcp/${PANEL_PORT})"
+        log_event panel_access_restored
+    fi
+
+    if ! iptables -C INPUT -p tcp --dport "$SSH_PORT" -j ACCEPT 2>/dev/null; then
+        iptables -I INPUT -p tcp --dport "$SSH_PORT" -j ACCEPT 2>/dev/null && changed=1
+        log "WARN" "Восстановлен доступ по SSH (tcp/${SSH_PORT})"
+    fi
+
+    # Порт WireGuard берём из конфига — он случайный на каждой установке.
+    local wgport
+    wgport=$(grep -oP '^\s*ListenPort\s*=\s*\K\d+' "$WG0_CONF" 2>/dev/null | head -1)
+    if [ -n "$wgport" ] && ! iptables -C INPUT -p udp --dport "$wgport" -j ACCEPT 2>/dev/null; then
+        iptables -I INPUT -p udp --dport "$wgport" -j ACCEPT 2>/dev/null && changed=1
+        log "WARN" "Восстановлен порт WireGuard (udp/${wgport})"
+    fi
+
+    [ "$changed" -eq 1 ] && iptables-save > /etc/iptables/rules.v4 2>/dev/null
+    return 0
+}
+
 # ═══════════════════════════════════════════════════════
 # УПРАВЛЕНИЕ
 # ═══════════════════════════════════════════════════════
@@ -447,7 +540,7 @@ do_recovery() {
 
 main_loop() {
     COOLDOWN=0; COOLDOWN_UNTIL=0; LAST_OK=0; LAST_RELOAD=0
-    LAST_KS_CHECK=0; LAST_BYPASS_SYNC=0; BYPASS_HASH=""
+    LAST_KS_CHECK=0; LAST_BYPASS_SYNC=0; BYPASS_HASH=""; LAST_ACCESS_CHECK=0
     WAN_STATE="ok"; WAN_DOWN_SINCE=0; vpn_ok=0
 
     mkdir -p "$LOG_DIR" 2>/dev/null
@@ -473,6 +566,22 @@ main_loop() {
         log "WARN" "Kill Switch отключён в настройках — при падении туннеля возможна утечка IP"
     fi
     sync_bypass
+
+    # Доступ к панели проверяем сразу после Kill Switch: если правила
+    # были сбиты до старта демона — восстановим до того, как iptables-save
+    # зафиксирует сломанное состояние.
+    ensure_access_rules
+
+    # Локальное правило маршрутизации — должно стоять даже если wg1 ещё нет:
+    # без него сломается трафик между клиентами сразу, как только появится
+    # правило цепочки.
+    if ! has_local_rule; then
+        ip rule add to "$WG0_SUBNET" lookup main preference 100 2>/dev/null \
+            && log "OK" "Добавлено правило 'to ${WG0_SUBNET} lookup main'"
+    fi
+    # На старых установках цепочка могла быть добавлена без preference и
+    # оказаться выше локального правила — проверяем и правим при старте.
+    rules_order_ok || fix_rules_order
 
     trap 'log "INFO" "Daemon остановлен"; exit 0' TERM INT
 
@@ -514,6 +623,7 @@ main_loop() {
         # атомарно (tmp -> rename), поэтому недочитать половину файла нельзя.
         check_killswitch
         sync_bypass
+        ensure_access_rules
 
         # Панель занята — в туннель не вмешиваемся. Это и есть защита от гонки.
         if [ "$VPN_STATE" = "busy" ]; then
@@ -566,9 +676,12 @@ main_loop() {
             sleep "$CHECK_INTERVAL"; continue
         fi
 
-        if ! has_chain_rule || ! has_chain_route; then
+        if ! has_chain_rule || ! has_chain_route || ! has_local_rule; then
             heal_chain
         fi
+        # Правила могут быть ВСЕ на месте, но в неверном порядке —
+        # тогда локальное правило не работает, хотя и существует.
+        rules_order_ok || fix_rules_order
 
         if ! tunnel_alive; then
             sleep 1

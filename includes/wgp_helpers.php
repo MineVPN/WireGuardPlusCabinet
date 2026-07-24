@@ -86,8 +86,9 @@ if (!defined('WGP_SESSION_IDLE')) define('WGP_SESSION_IDLE', 30 * 60); // про
  * это переносит риск, а не убирает. Компрометация веб-панели тогда means
  * компрометация root-пароля сервера. Отдельный хеш даёт изоляцию.
  *
- * Legacy-фолбэк на $truepassword оставлен для установок, которые ещё не
- * прошли миграцию через update.sh.
+ * Legacy-фолбэк на $truepassword оставлен для установок, где файлы панели
+ * обновили вручную, не перезапуская инсталлятор. При полной переустановке
+ * файл хеша создаётся всегда, и эта ветка не используется.
  */
 function wgp_check_password(string $input, ?string $legacyPlain = null): bool {
     if ($input === '' || strlen($input) > 256) return false;
