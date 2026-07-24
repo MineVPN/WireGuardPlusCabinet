@@ -1,0 +1,217 @@
+/* ══════════════════════════════════════════════════════════════
+   WGPlus — каркас: боковое меню + рабочая область
+   ══════════════════════════════════════════════════════════════ */
+
+.shell {
+  display: flex;
+  min-height: 100vh;
+}
+
+/* ── Боковое меню ─────────────────────────────────────────── */
+
+.side {
+  width: var(--sidebar-w);
+  flex: 0 0 var(--sidebar-w);
+  background: var(--bg-2);
+  border-right: 1px solid var(--line-soft);
+  display: flex;
+  flex-direction: column;
+  padding: var(--s-6) var(--s-4);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+/* Логотип крупный и по центру: это единственный брендовый элемент
+   в интерфейсе, где всё остальное — данные и кнопки. */
+.side__brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-2) var(--s-6);
+  text-align: center;
+}
+
+.side__logo {
+  width: 108px;
+  height: 108px;
+  object-fit: contain;
+  animation: float 5.5s ease-in-out infinite;
+}
+
+/* Лёгкое плавное движение вверх-вниз. Амплитуда маленькая —
+   анимация должна жить фоном, а не оттягивать внимание от данных. */
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-8px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .side__logo, .auth__logo { animation: none; }
+}
+
+.side__name {
+  font-size: var(--fs-md);
+  font-weight: 700;
+  letter-spacing: -.02em;
+}
+
+.side__sub {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  line-height: 1.25;
+}
+
+.side__nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+
+.side__label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding: var(--s-4) var(--s-3) var(--s-2);
+}
+
+.navlink {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-md);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+.navlink:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* Активный пункт — единственное место в меню с акцентом.
+   Полоса слева, а не заливка целиком: читается как «вы здесь». */
+.navlink--on {
+  background: var(--accent-dim);
+  color: var(--text);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.navlink svg {
+  width: 19px;
+  height: 19px;
+  flex: 0 0 auto;
+  opacity: .9;
+}
+
+.navlink--exit:hover {
+  background: var(--err-dim);
+  color: var(--err);
+}
+
+.side__foot {
+  margin-top: auto;
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--line-soft);
+}
+
+/* ── Рабочая область ──────────────────────────────────────── */
+
+.main {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: var(--s-8);
+  max-width: 1240px;
+}
+
+.page-head {
+  margin-bottom: var(--s-6);
+}
+
+.page-head__title {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+.page-head__note {
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  margin-top: var(--s-2);
+  max-width: 70ch;
+}
+
+/* ── Сетки ────────────────────────────────────────────────── */
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--s-5);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+/* ── Адаптив ──────────────────────────────────────────────
+   Панель часто открывают с телефона — «туннель лёг, надо глянуть».
+   Меню уезжает в горизонтальную полосу, ничего не прячется. */
+
+@media (max-width: 980px) {
+  .grid-2 { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 760px) {
+  .shell { flex-direction: column; }
+
+  .side {
+    width: 100%;
+    flex: none;
+    height: auto;
+    position: static;
+    border-right: none;
+    border-bottom: 1px solid var(--line-soft);
+    padding: var(--s-4) var(--s-3);
+  }
+
+  .side__brand {
+    flex-direction: row;
+    padding: 0 var(--s-2) var(--s-4);
+    text-align: left;
+  }
+
+  .side__logo { width: 56px; height: 56px; }
+  .side__label { display: none; }
+
+  .side__nav {
+    flex-direction: row;
+    overflow-x: auto;
+    gap: var(--s-1);
+  }
+
+  .navlink { white-space: nowrap; padding: var(--s-2) var(--s-3); }
+  .navlink--on { box-shadow: inset 0 -3px 0 var(--accent); }
+
+  .side__foot {
+    margin-top: var(--s-3);
+    padding-top: var(--s-3);
+  }
+
+  .main { padding: var(--s-4); }
+}

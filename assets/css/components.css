@@ -1,0 +1,515 @@
+/* ══════════════════════════════════════════════════════════════
+   WGPlus — компоненты
+   ══════════════════════════════════════════════════════════════ */
+
+/* Лёгкое плавное движение вверх-вниз для логотипа.
+   Определено здесь, а не в layout.css: страница входа не подключает
+   layout.css, а логотип на ней тоже должен двигаться.
+   Амплитуда маленькая — анимация живёт фоном и не оттягивает
+   внимание от данных. */
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-8px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .side__logo, .auth__logo { animation: none; }
+}
+
+/* ── Карточка ─────────────────────────────────────────────── */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-lg);
+  padding: var(--s-6);
+  box-shadow: var(--shadow-sm);
+}
+
+.card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  margin-bottom: var(--s-5);
+  flex-wrap: wrap;
+}
+
+.card__title {
+  font-size: var(--fs-md);
+  font-weight: 650;
+}
+
+.card__hint {
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+
+/* ── Индикатор состояния ──────────────────────────────────── */
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.dot--ok   { background: var(--ok);   box-shadow: 0 0 0 4px var(--ok-dim); }
+.dot--warn { background: var(--warn); box-shadow: 0 0 0 4px var(--warn-dim); }
+.dot--err  { background: var(--err);  box-shadow: 0 0 0 4px var(--err-dim); }
+.dot--off  { background: var(--text-faint); }
+
+/* ── Плашка ───────────────────────────────────────────────── */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-1) var(--s-3);
+  border-radius: var(--r-full);
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  border: 1px solid transparent;
+}
+
+.badge--ok   { background: var(--ok-dim);   color: var(--ok);   border-color: var(--ok-line); }
+.badge--warn { background: var(--warn-dim); color: var(--warn); border-color: var(--warn-line); }
+.badge--err  { background: var(--err-dim);  color: var(--err);  border-color: var(--err-line); }
+.badge--off  { background: var(--surface-2); color: var(--text-dim); border-color: var(--line); }
+
+/* ── Крупное значение ──────────────────────────────────────
+   Внешний адрес провайдера — главная цифра страницы «Туннель».
+   Через него понятно, куда сейчас выходят клиенты. */
+
+.hero {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: var(--s-5);
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+}
+
+.hero__k {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.hero__v {
+  font-family: var(--font-data);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  letter-spacing: -.01em;
+  word-break: break-all;
+}
+
+.hero__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+/* ── Пары «подпись — значение» ────────────────────────────── */
+
+.facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+
+.fact {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-4);
+  padding-bottom: var(--s-3);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.fact:last-child { border-bottom: none; padding-bottom: 0; }
+
+.fact__k {
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  flex: 0 0 auto;
+}
+
+.fact__v {
+  font-family: var(--font-data);
+  font-size: var(--fs-sm);
+  text-align: right;
+  word-break: break-all;
+}
+
+/* ── Кнопки ───────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-5);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease),
+              border-color var(--dur) var(--ease),
+              box-shadow var(--dur) var(--ease),
+              color var(--dur) var(--ease);
+}
+
+.btn:hover { background: var(--surface-hi); }
+.btn:active { transform: translateY(1px); }
+
+/* Градиент только на главном действии страницы. */
+.btn--primary {
+  background: var(--grad-primary);
+  border-color: transparent;
+  color: #fff;
+}
+.btn--primary:hover {
+  background: var(--grad-primary-2);
+  box-shadow: 0 0 20px var(--accent-glow);
+}
+
+.btn--ok {
+  background: var(--ok-dim);
+  border-color: var(--ok-line);
+  color: var(--ok);
+}
+.btn--ok:hover { background: rgba(16, 185, 129, .26); }
+
+.btn--danger {
+  background: var(--err-dim);
+  border-color: var(--err-line);
+  color: var(--err);
+}
+.btn--danger:hover { background: rgba(244, 63, 94, .26); }
+
+.btn--sm { padding: var(--s-1) var(--s-3); font-size: var(--fs-xs); }
+.btn--block { width: 100%; }
+
+.btn:disabled,
+.btn[disabled] {
+  opacity: .45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ── Поля ввода ───────────────────────────────────────────── */
+
+.field { display: flex; flex-direction: column; gap: var(--s-2); }
+
+.label {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.input,
+.select {
+  width: 100%;
+  padding: var(--s-3) var(--s-4);
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  color: var(--text);
+  font-family: var(--font-data);
+  font-size: var(--fs-sm);
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
+.input::placeholder { color: var(--text-faint); font-family: var(--font-ui); }
+
+.input:focus,
+.select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.select {
+  font-family: var(--font-ui);
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath fill='%238FA0B8' d='M6 8 0 0h12z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--s-4) center;
+  padding-right: var(--s-10);
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+
+.check input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* ── Зона загрузки файла ──────────────────────────────────── */
+
+.drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  min-height: 160px;
+  padding: var(--s-6);
+  border: 1px dashed var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+
+.drop:hover,
+.drop--hot {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.drop__main { font-weight: 600; }
+.drop__sub  { font-size: var(--fs-xs); color: var(--text-faint); }
+.drop__file { color: var(--ok); font-family: var(--font-data); font-size: var(--fs-sm); }
+
+/* ── Список маршрутов ─────────────────────────────────────── */
+
+.items { display: flex; flex-direction: column; gap: var(--s-2); }
+
+.item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+  padding: var(--s-3) var(--s-4);
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+}
+
+.item__v { font-family: var(--font-data); font-size: var(--fs-base); }
+
+/* ── Пустое состояние ─────────────────────────────────────
+   Не «список пуст», а подсказка что делать дальше. */
+
+.empty {
+  padding: var(--s-10) var(--s-4);
+  text-align: center;
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  border: 1px dashed var(--line-soft);
+  border-radius: var(--r-md);
+}
+
+/* ── Показатели (пинг) ────────────────────────────────────── */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--s-3);
+}
+
+.stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-2);
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  padding: var(--s-3) var(--s-4);
+}
+
+.stat__k {
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+}
+
+.stat__v {
+  font-family: var(--font-data);
+  font-size: var(--fs-md);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat__u {
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+  margin-left: var(--s-1);
+}
+
+.stat--ok   .stat__v { color: var(--ok); }
+.stat--err  .stat__v { color: var(--err); }
+.stat--warn .stat__v { color: var(--warn); }
+.stat--info .stat__v { color: var(--accent-hi); }
+
+@media (max-width: 1024px) {
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ── Окно пинга ────────────────────────────────
+   Простые строки целиком одного цвета. В потоке по замеру
+   в секунду важен цвет строки, а не разбивка на колонки. */
+
+.pinglog {
+  height: 380px;
+  background: var(--bg);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  padding: var(--s-3) var(--s-4);
+  font-family: var(--font-data);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  overflow-y: auto;
+}
+
+.pinglog p { margin: 0; padding: 2px 0; color: var(--text-faint); }
+.pinglog p.ok   { color: var(--ok); }
+.pinglog p.slow { color: var(--warn); }
+.pinglog p.fail { color: var(--err); }
+
+/* Панель управления: адрес тянется, выбор пути фиксирован,
+   кнопки по размеру содержимого. */
+.ping-controls {
+  display: grid;
+  grid-template-columns: 1fr 220px auto;
+  gap: var(--s-3);
+  align-items: end;
+}
+
+.ping-controls__btns { display: flex; gap: var(--s-2); }
+
+@media (max-width: 860px) {
+  .ping-controls { grid-template-columns: 1fr; }
+}
+
+/* ── Консоль (пинг и события) ─────────────────────────────── */
+
+.console {
+  background: var(--bg);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  padding: var(--s-4);
+  font-family: var(--font-data);
+  font-size: var(--fs-xs);
+  line-height: 1.7;
+  overflow: auto;
+  height: 60vh;
+  min-height: 320px;
+}
+
+.console--short { height: 340px; min-height: 0; }
+
+/* Строка: время — источник — текст. Колонки фиксированной ширины,
+   чтобы взгляд шёл вертикально по времени. */
+.line {
+  display: grid;
+  grid-template-columns: 150px 74px minmax(0, 1fr);
+  gap: var(--s-3);
+  padding: 1px 0;
+}
+
+.line__t   { color: var(--text-faint); }
+.line__src { color: var(--text-faint); }
+.line__m   { color: var(--text-dim); word-break: break-word; }
+
+.line--ok   .line__m { color: var(--ok); }
+.line--warn .line__m { color: var(--warn); }
+.line--err  .line__m { color: var(--err); }
+
+@media (max-width: 760px) {
+  .line { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .line__t, .line__src { display: inline; margin-right: var(--s-2); }
+}
+
+/* ── Уведомление ──────────────────────────────────────────── */
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+  padding: var(--s-4) var(--s-5);
+  border-radius: var(--r-md);
+  border: 1px solid;
+  font-size: var(--fs-sm);
+  margin-bottom: var(--s-5);
+}
+
+.notice--ok  { background: var(--ok-dim);  border-color: var(--ok-line);  color: var(--ok); }
+.notice--err { background: var(--err-dim); border-color: var(--err-line); color: var(--err); }
+
+/* ── Страница входа ───────────────────────────────────────── */
+
+.auth {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--s-5);
+}
+
+.auth__card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-xl);
+  padding: var(--s-10) var(--s-8);
+  text-align: center;
+  box-shadow: var(--shadow-lg);
+}
+
+.auth__logo {
+  width: 168px;
+  height: 168px;
+  object-fit: contain;
+  margin-bottom: var(--s-5);
+  animation: float 5.5s ease-in-out infinite;
+}
+
+.auth__title { font-size: var(--fs-lg); font-weight: 700; letter-spacing: -.02em; }
+
+.auth__sub {
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  margin-bottom: var(--s-8);
+}
+
+.auth__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  text-align: left;
+}
+
+.auth__err {
+  padding: var(--s-3) var(--s-4);
+  background: var(--err-dim);
+  border: 1px solid var(--err-line);
+  border-radius: var(--r-md);
+  color: var(--err);
+  font-size: var(--fs-sm);
+  text-align: center;
+}
