@@ -97,6 +97,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         wgp_state_set('busy');
         wgp_log('INFO', 'Отключение и удаление конфига провайдера');
         shell_exec('sudo systemctl disable wg-quick@wg1 2>&1');
+        shell_exec('sudo systemctl stop wg-quick@wg1 2>&1');
         if (file_exists(WGP_WG1_CONF)) {
             @copy(WGP_WG1_CONF, WGP_WG1_BAK);
             shell_exec('sudo rm /etc/wireguard/wg1.conf 2>&1');
