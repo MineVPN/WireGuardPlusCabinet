@@ -41,7 +41,11 @@ LOCK="/run/wg-healthcheck.lock"
 MAX_LOG=2097152          # 2 MB
 KEEP_LINES=1500
 
-PING_HOSTS=("8.8.8.8" "1.1.1.1" "9.9.9.9")
+# Адреса для проверки связи. Пять штук из трёх разных сетей — если одна
+# заблокирована или лежит, остальные всё равно ответят.
+# Список должен совпадать с WGP_PROBE_HOSTS в includes/wgp_helpers.php:
+# панель запрещает добавлять их в обход, иначе проверка сломается.
+PING_HOSTS=("8.8.8.8" "8.8.4.4" "1.1.1.1" "1.0.0.1" "9.9.9.9")
 PING_TIMEOUT=2           # таймаут одного ping (с)
 CHECK_INTERVAL=2         # период цикла — связь проверяется каждые 2с
 RETRY_DELAY=0.4          # пауза перед второй попыткой ping (с)
@@ -234,15 +238,32 @@ ping_tunnel() { ping_via "$WG0_GW"; }
 # шлюза (один /32) с preference 90. Клиентский трафик не затрагивается:
 # у клиентов другие адреса, они продолжают идти напрямую.
 probe_tunnel() {
-    if [ "${CHAIN_BYPASSED:-0}" -eq 0 ]; then
-        ping_tunnel
-        return $?
-    fi
     local rc=0
-    ip rule add from "$WG0_GW" table "$TABLE_ID" preference 90 2>/dev/null
-    ping_tunnel || rc=1
-    ip rule del from "$WG0_GW" table "$TABLE_ID" preference 90 2>/dev/null
-    return $rc
+    if [ "${CHAIN_BYPASSED:-0}" -eq 0 ]; then
+        ping_tunnel && return 0
+        rc=1
+    else
+        ip rule add from "$WG0_GW" table "$TABLE_ID" preference 90 2>/dev/null
+        ping_tunnel || rc=1
+        ip rule del from "$WG0_GW" table "$TABLE_ID" preference 90 2>/dev/null
+        [ "$rc" -eq 0 ] && return 0
+    fi
+
+    # Ни один из пяти адресов не ответил. Перед тем как решить,
+    # что туннель мёртв, спросим сам WireGuard.
+    #
+    # ЗАЧЕМ: бывает, что второй впн режет ICMP или все публичные DNS
+    # недоступны из его страны. Туннель при этом жив и трафик ходит,
+    # а демон без этой проверки бесконечно перезапускал бы исправное соединение.
+    #
+    # Свежий handshake доказывает, что узел отвечает — это не замена пингу,
+    # но достаточно, чтобы не дёргать туннель зря.
+    local age
+    age=$(handshake_age)
+    if [ "$age" -ge 0 ] 2>/dev/null && [ "$age" -lt 60 ]; then
+        return 0
+    fi
+    return 1
 }
 
 # Запись причины падения без спама: одна и та же причина попадает

@@ -228,6 +228,19 @@ $up        = wgp_iface_exists();
         командой <code>ping адрес-сервиса.ru</code> в командной строке — он покажется в скобках.
       </span>
     </div>
+
+    <div class="callout callout--warn" style="margin-top: var(--s-3)">
+      <span class="callout__mark">⛔</span>
+      <span>
+        Адреса <span class="data">8.8.8.8</span>, <span class="data">8.8.4.4</span>,
+        <span class="data">1.1.1.1</span>, <span class="data">1.0.0.1</span> и
+        <span class="data">9.9.9.9</span> добавить нельзя — ими сервер проверяет,
+        жив ли второй впн. Если пустить их мимо туннеля, проверка всегда
+        будет успешной, и падения перестанут замечаться.
+        Для DNS укажите другой сервер: <span class="data">77.88.8.8</span> (Яндекс)
+        или <span class="data">208.67.222.222</span> (OpenDNS).
+      </span>
+    </div>
   </div>
 
   <!-- ══ Остальные разделы ══ -->

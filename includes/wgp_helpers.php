@@ -72,6 +72,18 @@ if (!defined('WGP_ROUTES_FILE'))define('WGP_ROUTES_FILE', WGP_DATA_DIR . '/route
 // www-data мог писать в сам файл, но не создать *.tmp рядом.
 if (!defined('WGP_SETTINGS_FILE')) define('WGP_SETTINGS_FILE', WGP_DATA_DIR . '/settings');
 if (!defined('WGP_TABLE_ID'))   define('WGP_TABLE_ID',   '120');
+
+// Адреса, которыми демон проверяет связь через туннель.
+//
+// Добавлять их в обход НЕЛЬЗЯ: тогда проверочный пинг уйдёт напрямую
+// и будет успешен всегда — даже когда второй впн лежит. Демон перестанет
+// видеть аварии, а клиенты останутся без интернета без всякой реакции.
+//
+// Список должен совпадать с PING_HOSTS в wg-healthcheck.sh.
+if (!defined('WGP_PROBE_HOSTS')) {
+    define('WGP_PROBE_HOSTS', '8.8.8.8,8.8.4.4,1.1.1.1,1.0.0.1,9.9.9.9');
+}
+
 if (!defined('WGP_LOG_DIR'))    define('WGP_LOG_DIR',    '/var/log/wgplus');
 // ОДИН журнал на всю систему. Раньше было три файла
 // (panel / health / events) и три вкладки в интерфейсе, а события
@@ -277,6 +289,11 @@ function wgp_wg0_net(): array {
         'prefix'  => $prefix,
         'cidr'    => $network . '/' . $prefix,
     ];
+}
+
+/** Проверочный ли это адрес — такие нельзя класть в обход. */
+function wgp_is_probe_host(string $ip): bool {
+    return in_array($ip, explode(',', WGP_PROBE_HOSTS), true);
 }
 
 /**

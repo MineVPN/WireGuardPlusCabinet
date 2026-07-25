@@ -29,7 +29,7 @@ wgp_require_auth();
     <div class="ping-controls">
       <div class="field">
         <label class="label" for="host">Адрес или домен</label>
-        <input type="text" id="host" class="input" value="8.8.8.8" placeholder="8.8.8.8 или google.com">
+        <input type="text" id="host" class="input" value="208.67.222.222" placeholder="208.67.222.222 или google.com">
       </div>
       <div class="field">
         <label class="label" for="path">Путь</label>

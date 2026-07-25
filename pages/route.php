@@ -75,6 +75,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_ip'])) {
         $notice = 'Введите корректный IPv4-адрес';
         $noticeKind = 'err';
 
+    } elseif (wgp_is_probe_host($ip)) {
+        // Этими адресами демон проверяет, жив ли туннель. Если пустить их
+        // мимо туннеля — проверка будет успешна всегда, и падения второго
+        // впн перестанут замечаться вовсе.
+        $notice = 'Адрес ' . htmlspecialchars($ip) . ' используется для проверки связи и в обход не добавляется. '
+                . 'Иначе сервер перестанет замечать падения второго впн. '
+                . 'Для DNS укажите другой сервер, например 77.88.8.8 или 208.67.222.222.';
+        $noticeKind = 'err';
+        wgp_log('WARN', "Отклонён обход для $ip — это проверочный адрес демона");
+
     } elseif (in_array($ip, $routes, true)) {
         $notice = "Адрес $ip уже в списке";
         $noticeKind = 'err';
@@ -140,7 +150,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_ip'])) {
       <?= wgp_csrf_field() ?>
       <input type="hidden" name="menu" value="route">
       <input type="text" name="add_ip" class="input grow" required
-             placeholder="например 1.1.1.1"
+             placeholder="например 91.219.29.10"
              pattern="^(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])$"
              title="IPv4-адрес, четыре числа через точку">
       <button type="submit" class="btn btn--primary">Добавить</button>
