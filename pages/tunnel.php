@@ -130,6 +130,16 @@ function wgp_addr_conflict(string $raw, array $net): string {
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
+    if (isset($_POST['killswitch'])) {
+        $want = $_POST['killswitch'] === 'on';
+        if (wgp_killswitch_set($want)) {
+            wgp_log('OK', $want
+                ? 'Включён Kill Switch — при падении второго впн интернет будет отключён'
+                : 'Выключен Kill Switch — при падении второго впн трафик пойдёт напрямую');
+        }
+        header('Location: cabinet.php?menu=tunnel'); exit();
+    }
+
     if (isset($_POST['start'])) {
         wgp_state_set('busy');
         wgp_log('INFO', 'Запуск туннеля из панели');
@@ -289,6 +299,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ── Состояние для отрисовки ────────────────────────────────────
+$killswitch = wgp_killswitch_on();
+
 if (!$hasConfig) {
     $stateKind = 'off';
     $stateText = 'Не настроено';
@@ -300,7 +312,9 @@ if (!$hasConfig) {
 } else {
     $stateKind = 'err';
     $stateText = 'Нет связи';
-    $stateNote = 'Впн конфиг загружен, но соединение не установлено. Интернета у клиентов сейчас нет — иначе трафик пошёл бы с адреса сервера.';
+    $stateNote = $killswitch
+        ? 'Впн конфиг загружен, но соединение не установлено. Интернета у клиентов сейчас нет — так работает Kill Switch.'
+        : 'Впн конфиг загружен, но соединение не установлено. Клиенты сейчас работают напрямую через этот сервер.';
 }
 ?>
 
@@ -394,6 +408,60 @@ if (!$hasConfig) {
       Если новый конфиг не поднимется, вернётся предыдущий.
     </p>
   </div>
+</div>
+
+<!-- ══ Поведение при аварии ══ -->
+<div class="card" style="margin-top: var(--s-5)">
+  <div class="card__head">
+    <h2 class="card__title">Если второй впн упадёт</h2>
+    <span class="badge badge--<?= $killswitch ? 'warn' : 'off' ?>">
+      <?= $killswitch ? 'Интернет отключится' : 'Работает напрямую' ?>
+    </span>
+  </div>
+
+  <p style="color: var(--text-dim); line-height: 1.7; margin-bottom: var(--s-5)">
+    Второй впн иногда падает — у продавца закончилась подписка, сервер на ремонте,
+    оборвалась связь. Здесь выбираете, что делать в такой момент.
+  </p>
+
+  <form method="post">
+    <?= wgp_csrf_field() ?>
+    <input type="hidden" name="menu" value="tunnel">
+
+    <div class="items">
+      <label class="item" style="cursor:pointer; align-items:flex-start; gap:var(--s-4)">
+        <input type="radio" name="killswitch" value="off" <?= $killswitch ? '' : 'checked' ?>
+               style="margin-top:5px; width:17px; height:17px; accent-color:var(--accent); flex:0 0 auto">
+        <span>
+          <span style="font-weight:650; display:block; margin-bottom:3px">Продолжать работу напрямую</span>
+          <span style="color:var(--text-dim); font-size:var(--fs-sm); line-height:1.6; display:block">
+            Интернет у клиентов не пропадёт — трафик пойдёт через этот сервер,
+            как будто второго впн нет. Сайты увидят страну этого сервера,
+            а не ту, что вы подключали. Когда второй впн оживёт, всё вернётся само.
+          </span>
+        </span>
+      </label>
+
+      <label class="item" style="cursor:pointer; align-items:flex-start; gap:var(--s-4)">
+        <input type="radio" name="killswitch" value="on" <?= $killswitch ? 'checked' : '' ?>
+               style="margin-top:5px; width:17px; height:17px; accent-color:var(--warn); flex:0 0 auto">
+        <span>
+          <span style="font-weight:650; display:block; margin-bottom:3px">Отключать интернет — Kill Switch</span>
+          <span style="color:var(--text-dim); font-size:var(--fs-sm); line-height:1.6; display:block">
+            Интернет у клиентов пропадёт полностью, пока второй впн не вернётся.
+            Зато ни один запрос точно не уйдёт с адреса этого сервера.
+            Нужно, когда важно, чтобы сайты видели только страну второго впн.
+          </span>
+        </span>
+      </label>
+    </div>
+
+    <button type="submit" class="btn btn--block" style="margin-top: var(--s-4)">Сохранить</button>
+  </form>
+
+  <p class="card__hint" style="margin-top: var(--s-4)">
+    Настройка применяется в течение 15 секунд, перезапускать ничего не нужно.
+  </p>
 </div>
 
 <script>
