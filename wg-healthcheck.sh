@@ -45,7 +45,9 @@ PING_HOSTS=("8.8.8.8" "1.1.1.1" "9.9.9.9")
 PING_TIMEOUT=2           # таймаут одного ping (с)
 CHECK_INTERVAL=2         # период цикла — связь проверяется каждые 2с
 RETRY_DELAY=0.4          # пауза перед второй попыткой ping (с)
-POLL_MAX=10              # макс ожидание подъёма после перезапуска (с)
+POLL_MAX=6               # макс ожидание подъёма после перезапуска (с).
+                         # На это время цикл заблокирован: не видно ни падения,
+                         # ни смены настроек в панели — поэтому не затягиваем.
 WARMUP_TIMEOUT=120       # ждём стабилизации после старта (с)
 COOLDOWN_INITIAL=10      # начальная пауза между попытками (с)
 COOLDOWN_MAX=60          # потолок паузы (с)
@@ -467,7 +469,14 @@ mode_rules_ok() {
             if killswitch_enabled; then
                 iptables -C FORWARD -i wg0 -o "$WAN_IF" -j REJECT --reject-with icmp-net-unreachable 2>/dev/null
             else
-                return 0
+                # Kill Switch выключен — проверяем ОБА условия.
+                #
+                # Здесь было 'return 0' — режим считался исправным без всякой
+                # проверки. После «включил Kill Switch → выключил» правило REJECT
+                # оставалось висеть навсегда: демон считал режим верным и не
+                # перестраивал iptables. Интернет не возвращался до удаления конфига.
+                iptables -C FORWARD -i wg0 -o "$WAN_IF" -j REJECT --reject-with icmp-net-unreachable 2>/dev/null && return 1
+                iptables -C FORWARD -i wg0 -o "$WAN_IF" -j ACCEPT 2>/dev/null
             fi
             ;;
     esac
@@ -520,7 +529,9 @@ check_forward_mode() {
     iptables_available || return 0
     local now want
     now=$(date +%s)
-    [ $((now - LAST_KS_CHECK)) -lt 15 ] && return 0
+    # Проверяем чаще остального: пользователь ждёт реакции сразу
+    # после нажатия «Сохранить», а не через полминуты.
+    [ $((now - LAST_KS_CHECK)) -lt 5 ] && return 0
     LAST_KS_CHECK=$now
     [ -z "$WAN_IF" ] && return 0
 
