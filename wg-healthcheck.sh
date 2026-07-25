@@ -43,7 +43,8 @@ KEEP_LINES=1500
 
 PING_HOSTS=("8.8.8.8" "1.1.1.1" "9.9.9.9")
 PING_TIMEOUT=2           # таймаут одного ping (с)
-CHECK_INTERVAL=5         # период цикла — связь проверяется каждые 5с
+CHECK_INTERVAL=2         # период цикла — связь проверяется каждые 2с
+RETRY_DELAY=0.4          # пауза перед второй попыткой ping (с)
 POLL_MAX=10              # макс ожидание подъёма после перезапуска (с)
 WARMUP_TIMEOUT=120       # ждём стабилизации после старта (с)
 COOLDOWN_INITIAL=10      # начальная пауза между попытками (с)
@@ -296,7 +297,9 @@ heal_chain() {
         log "WARN" "Потеряно правило 'to ${WG0_SUBNET} lookup main' — восстанавливаю"
         ip rule add to "$WG0_SUBNET" lookup main preference 100 2>/dev/null && healed=1
     fi
-    if ! has_chain_rule; then
+    # В режиме временного обхода правило цепочки снято НАМЕРЕННО —
+    # восстанавливать его здесь значит сразу же снова отобрать интернет.
+    if [ "${CHAIN_BYPASSED:-0}" -eq 0 ] && ! has_chain_rule; then
         log "WARN" "Потеряно ip rule (from ${WG0_SUBNET} table ${TABLE_ID}) — восстанавливаю"
         # preference ЗАДАЁМ ЯВНО: без него ip rule берёт номер на 1 меньше
         # текущего минимума и окажется ВЫШЕ правила 100 — тогда цепочка
@@ -311,6 +314,46 @@ heal_chain() {
         log "OK" "Цепочка маршрутизации восстановлена без перезапуска VPN"
         log_event chain_healed "$WG0_SUBNET"
     fi
+}
+
+# ══════════════════════════════════════════════════════
+# ВРЕМЕННЫЙ ОБХОД — работа напрямую, пока второй впн лежит
+# ══════════════════════════════════════════════════════
+#
+# ПОЧЕМУ НЕДОСТАТОЧНО ПРАВИЛ iptables:
+# правило 'from <подсеть> table 120' забирает весь трафик клиентов в таблицу 120,
+# а там default ведёт в wg1. Если интерфейс есть, но связи нет — пакеты
+# просто гибнут в нём. До FORWARD дело вообще не доходит, поэтому разрешающее
+# правило 'wg0 -> NIC ACCEPT' ничего не давало: клиенты сидели без интернета
+# всё время, пока демон перезапускал туннель.
+#
+# Решение: снять само правило — тогда трафик проваливается в main-таблицу
+# и уходит через NIC. Когда туннель оживёт — правило возвращается.
+
+enter_failover() {
+    # ИДЕМПОТЕНТНО: смотрим на ФАКТИЧЕСКОЕ наличие правила, а не на флаг.
+    #
+    # Почему важно: после каждого restart_tunnel срабатывает PostUp из wg1.conf,
+    # который добавляет правило обратно — даже если туннель так и не заработал.
+    # С проверкой по флагу мы бы решили "уже в обходе" и ничего не сделали —
+    # а клиенты снова остались без интернета до следующего цикла.
+    if has_chain_rule; then
+        while ip rule show 2>/dev/null | grep -q "from ${WG0_SUBNET} lookup \(vpnchain\|${TABLE_ID}\)"; do
+            ip rule del from "$WG0_SUBNET" table "$TABLE_ID" preference 32765 2>/dev/null || break
+        done
+        # Сообщаем только при первом переходе, иначе журнал забьётся
+        # одной строкой после каждого перезапуска.
+        [ "${CHAIN_BYPASSED:-0}" -eq 0 ] && \
+            log "WARN" "Второй впн недоступен — клиенты временно выходят напрямую через этот сервер"
+    fi
+    CHAIN_BYPASSED=1
+}
+
+exit_failover() {
+    [ "${CHAIN_BYPASSED:-0}" -eq 0 ] && return 0
+    ip rule add from "$WG0_SUBNET" table "$TABLE_ID" preference 32765 2>/dev/null
+    CHAIN_BYPASSED=0
+    log "OK" "Второй впн вернулся — трафик снова идёт через него"
 }
 
 # ВАЖЕН ПОРЯДОК: ping с source-адресом шлюза идёт тем же путём, что и трафик
@@ -571,6 +614,9 @@ restart_tunnel() {
             log "OK" "${INTERFACE} восстановлен за ${i}с"
             return 0
         fi
+        # PostUp вернул правило цепочки — а туннель ещё не работает.
+        # Снимаем его сразу, чтобы клиенты не теряли интернет на время попытки.
+        [ "${CHAIN_BYPASSED:-0}" -eq 1 ] && enter_failover
     done
     log "WARN" "${INTERFACE} не поднялся за ${POLL_MAX}с"
     return 1
@@ -607,7 +653,7 @@ do_recovery() {
 
 main_loop() {
     COOLDOWN=0; COOLDOWN_UNTIL=0; LAST_OK=0; LAST_RELOAD=0
-    LAST_DOWN_REASON=""; LAST_DOWN_AT=0
+    LAST_DOWN_REASON=""; LAST_DOWN_AT=0; CHAIN_BYPASSED=0
     LAST_KS_CHECK=0; LAST_BYPASS_SYNC=0; BYPASS_HASH=""; LAST_ACCESS_CHECK=0; CURRENT_MODE=""
     WAN_STATE="ok"; WAN_DOWN_SINCE=0; vpn_ok=0
 
@@ -736,6 +782,7 @@ main_loop() {
         if ! iface_exists; then
             note_down "интерфейс ${INTERFACE} пропал"
             vpn_ok=0
+            killswitch_enabled || enter_failover
             do_recovery && vpn_ok=1
             sleep "$CHECK_INTERVAL"; continue
         fi
@@ -743,21 +790,34 @@ main_loop() {
         if ! iface_has_ip; then
             note_down "на интерфейсе нет IP-адреса"
             vpn_ok=0
+            killswitch_enabled || enter_failover
             do_recovery && vpn_ok=1
             sleep "$CHECK_INTERVAL"; continue
         fi
 
-        if ! has_chain_rule || ! has_chain_route || ! has_local_rule; then
-            heal_chain
-        fi
-        # Правила могут быть ВСЕ на месте, но в неверном порядке —
-        # тогда локальное правило не работает, хотя и существует.
-        rules_order_ok || fix_rules_order
+        # Если Kill Switch включили в панели, пока действовал обход —
+        # возвращаем правило сразу, не дожидаясь подъёма туннеля.
+        [ "${CHAIN_BYPASSED:-0}" -eq 1 ] && killswitch_enabled && exit_failover
 
-        # Связь проверяется пингом КАЖДЫЕ 5С — без опоры на handshake.
-        # Две попытки с паузой: одиночная потеря пакета не повод для перезапуска.
+        # В режиме обхода правило цепочки снято намеренно — не считаем это поломкой.
+        if [ "${CHAIN_BYPASSED:-0}" -eq 0 ]; then
+            if ! has_chain_rule || ! has_chain_route || ! has_local_rule; then
+                heal_chain
+            fi
+            # Правила могут быть ВСЕ на месте, но в неверном порядке —
+            # тогда локальное правило не работает, хотя и существует.
+            rules_order_ok || fix_rules_order
+        else
+            # Локальное правило нужно в любом случае: без него ломается
+            # связь между клиентами и доступ к панели по адресу шлюза.
+            has_local_rule || ip rule add to "$WG0_SUBNET" lookup main preference 100 2>/dev/null
+        fi
+
+        # Связь проверяется пингом каждые 2с — без опоры на handshake.
+        # Две попытки с короткой паузой: одиночная потеря пакета не повод
+        # для переключения, но и тянуть целую секунду незачем.
         if ! ping_tunnel; then
-            sleep 1
+            sleep "$RETRY_DELAY"
             if ! ping_tunnel; then
                 # Прежде чем винить туннель — жив ли интернет самого сервера?
                 # Если лёг интернет самого сервера — туннель не виноват, дёргать его бессмысленно.
@@ -768,6 +828,8 @@ main_loop() {
                 fi
                 note_down "нет связи через туннель"
                 vpn_ok=0
+                # Kill Switch выключен — отдаём трафик напрямую, пока чиним туннель.
+                killswitch_enabled || enter_failover
                 do_recovery && vpn_ok=1
                 sleep "$CHECK_INTERVAL"; continue
             fi
@@ -778,6 +840,11 @@ main_loop() {
             LAST_DOWN_REASON=""; LAST_DOWN_AT=0
             log "OK" "Туннель работает"
         fi
+
+        # Туннель жив — возвращаем трафик в цепочку, если был обход.
+        # Проверка стоит здесь, а не в начале цикла: возвращать трафик в туннель
+        # можно только после того, как убедились, что он реально работает.
+        exit_failover
 
         sleep "$CHECK_INTERVAL"
     done
