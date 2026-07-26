@@ -24,6 +24,10 @@ if (wgp_session_invalid_reason() !== '') {
     exit;
 }
 
+// Снимаем блокировку сессии: журнал опрашивается раз в пять секунд,
+// и держать её всё это время значит блокировать остальные вкладки.
+session_write_close();
+
 $lines = (int) ($_GET['lines'] ?? 500);
 $lines = max(50, min(3000, $lines));
 $only  = ($_GET['only'] ?? '') === 'problems';

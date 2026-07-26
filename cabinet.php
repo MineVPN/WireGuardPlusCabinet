@@ -34,10 +34,26 @@ $pages = [
 ];
 
 $menu = $_GET['menu'] ?? 'tunnel';
-if (!array_key_exists($menu, $pages)) $menu = 'tunnel';
+// is_string обязателен: ?menu[]=x даёт TypeError в array_key_exists и 500.
+if (!is_string($menu) || !array_key_exists($menu, $pages)) $menu = 'tunnel';
 
 // Версия для сброса кеша браузера при обновлении стилей.
-$v = '2.1';
+$v = '2.2';
+
+/*
+ * Страница рендерится В ПЕРЕМЕННУЮ до вывода любого HTML.
+ *
+ * Все обработчики POST живут во включаемых страницах и заканчиваются
+ * header('Location: …'). Раньше страница подключалась после вывода шапки
+ * и меню — примерно 2.9 КБ при буфере php.ini в 4096 байт. То есть
+ * редиректы работали только за счёт буферизации, с запасом около
+ * килобайта: любой новый пункт меню или лишний <link> ломал бы их разом.
+ * После «Сохранить» пользователь получал бы страницу без обновления
+ * состояния, а в error_log сыпалось «headers already sent».
+ */
+ob_start();
+include __DIR__ . '/' . $pages[$menu]['file'];
+$page_content = ob_get_clean();
 
 function nav_item(string $key, string $current, string $title, string $icon): void {
     $on = $key === $current ? ' navlink--on' : '';
@@ -95,7 +111,7 @@ $icoExit   = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-
   </aside>
 
   <main class="main">
-    <?php include __DIR__ . '/' . $pages[$menu]['file']; ?>
+    <?= $page_content ?>
   </main>
 </div>
 

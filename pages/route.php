@@ -3,8 +3,9 @@
  * WGPlus — страница «Обход VPN».
  *
  * Адреса из этого списка идут напрямую через сервер, минуя туннель
- * второго впн. Правило применяется сразу и дублируется в wg0.conf,
- * чтобы пережить перезагрузку.
+ * второго впн. Список — единственный источник правды; правила
+ * маршрутизации и цепочку iptables по нему строит healthcheck-демон,
+ * он же восстанавливает их после перезагрузки.
  */
 
 require_once __DIR__ . '/../includes/wgp_helpers.php';
@@ -12,9 +13,7 @@ require_once __DIR__ . '/../includes/wgp_helpers.php';
 wgp_require_auth();
 wgp_csrf_require();
 
-$wg0Conf    = WGP_WG0_CONF;
 $routesFile = WGP_ROUTES_FILE;
-$pref       = 30000;
 $net        = wgp_wg0_net();
 $notice     = '';
 $noticeKind = 'ok';
@@ -41,27 +40,27 @@ function wgp_saveRoutes(array $routes, string $file): bool {
     return true;
 }
 
-function wgp_addBypass(string $ip, int $pref, string $conf): void {
-    $up   = "PostUp = ip rule add to $ip table main preference $pref";
-    $down = "PostDown = ip rule del to $ip table main preference $pref";
-    $c = @file_get_contents($conf);
-    if ($c === false || strpos($c, $up) !== false) return;
-    $c = preg_replace('/(\[Interface\]\s*\r?\n)/', "$1$up\n$down\n", $c, 1);
-    @file_put_contents($conf, $c);
-}
-
-function wgp_delBypass(string $ip, int $pref, string $conf): void {
-    $up   = "PostUp = ip rule add to $ip table main preference $pref";
-    $down = "PostDown = ip rule del to $ip table main preference $pref";
-    $lines = @file($conf, FILE_IGNORE_NEW_LINES);
-    if (!is_array($lines)) return;
-    $kept = [];
-    foreach ($lines as $l) {
-        $t = trim($l);
-        if ($t !== trim($up) && $t !== trim($down)) $kept[] = $l;
-    }
-    @file_put_contents($conf, implode(PHP_EOL, $kept) . PHP_EOL);
-}
+/*
+ * ПАНЕЛЬ БОЛЬШЕ НЕ ТРОГАЕТ НИ wg0.conf, НИ ПРАВИЛА МАРШРУТИЗАЦИИ.
+ *
+ * Раньше здесь было три функции: две дописывали в wg0.conf строки
+ * PostUp/PostDown для сохранения обхода между перезагрузками, третья
+ * перезаписывала файл. Всё это убрано, потому что:
+ *
+ *   • wg0.conf содержит приватный ключ сервера и всех пиров. Каждое
+ *     изменение списка обхода переписывало живой файл целиком — обрыв
+ *     PHP посреди записи стоил бы полной переустановки сервера.
+ *
+ *   • Немедленное применение шло через sudo, для чего в sudoers стоял
+ *     шаблон 'ip rule add to * …'. Звёздочка у sudo матчит и слэш,
+ *     поэтому 'to 0.0.0.0/0' проходил проверку и уводил весь трафик
+ *     клиентов мимо цепочки.
+ *
+ * Теперь единственный источник правды — routes.txt, а применяет его
+ * healthcheck-демон: и цепочку iptables, и правила ip rule. Он же
+ * восстанавливает их после перезагрузки, так что дублировать состояние
+ * в конфиг больше не нужно.
+ */
 
 $routes = file_exists($routesFile)
     ? (file($routesFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [])
@@ -69,7 +68,9 @@ $routes = file_exists($routesFile)
 
 // ── Добавление ────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_ip'])) {
-    $ip = trim($_POST['add_ip']);
+    // is_string обязателен: add_ip[]=x даёт TypeError в trim() и 500
+    // посреди уже отрисованной страницы.
+    $ip = is_string($_POST['add_ip']) ? trim($_POST['add_ip']) : '';
 
     if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) {
         $notice = 'Введите корректный IPv4-адрес';
@@ -79,7 +80,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_ip'])) {
         // Этими адресами демон проверяет, жив ли туннель. Если пустить их
         // мимо туннеля — проверка будет успешна всегда, и падения второго
         // впн перестанут замечаться вовсе.
-        $notice = 'Адрес ' . htmlspecialchars($ip) . ' используется для проверки связи и в обход не добавляется. '
+        // Без htmlspecialchars: экранирование делается один раз при выводе
+        // ($notice проходит через htmlspecialchars в разметке ниже).
+        $notice = 'Адрес ' . $ip . ' используется для проверки связи и в обход не добавляется. '
                 . 'Иначе сервер перестанет замечать падения второго впн. '
                 . 'Для DNS укажите другой сервер, например 77.88.8.8 или 208.67.222.222.';
         $noticeKind = 'err';
@@ -98,8 +101,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_ip'])) {
             $noticeKind = 'err';
             array_pop($routes);
         } else {
-            exec('sudo ip rule add to ' . escapeshellarg($ip) . " table main preference $pref");
-            wgp_addBypass($ip, $pref, $wg0Conf);
+            // Применяет демон в течение нескольких секунд — см. комментарий
+            // в начале файла о том, почему панель этого больше не делает.
             wgp_log('OK', "Добавлен обход второго впн для $ip");
             header('Location: cabinet.php?menu=route'); exit();
         }
@@ -108,12 +111,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_ip'])) {
 
 // ── Удаление ──────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_ip'])) {
-    $ip = trim($_POST['del_ip']);
+    $ip = is_string($_POST['del_ip']) ? trim($_POST['del_ip']) : '';
     if (in_array($ip, $routes, true)
         && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
 
-        exec('sudo ip rule del to ' . escapeshellarg($ip) . " table main preference $pref");
-        wgp_delBypass($ip, $pref, $wg0Conf);
         $routes = array_values(array_filter($routes, fn($r) => $r !== $ip));
 
         if (!wgp_saveRoutes($routes, $routesFile)) {
@@ -136,6 +137,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['del_ip'])) {
   <p class="page-head__note">
     Трафик на эти адреса пойдёт напрямую через промежуточный сервер, минуя туннель второго впн.
     Обычно сюда добавляют телефонии и другие сервисы, которым нужна минимальная задержка.
+    Изменения применяются в течение нескольких секунд.
   </p>
 </div>
 

@@ -71,6 +71,10 @@ if (!defined('WGP_ROUTES_FILE'))define('WGP_ROUTES_FILE', WGP_DATA_DIR . '/route
 // требует права на КАТАЛОГ. Раньше файл лежал в /var/www (root:root 755) —
 // www-data мог писать в сам файл, но не создать *.tmp рядом.
 if (!defined('WGP_SETTINGS_FILE')) define('WGP_SETTINGS_FILE', WGP_DATA_DIR . '/settings');
+// Признак реального состояния туннеля, который пишет healthcheck-демон.
+// Панель по одному лишь наличию интерфейса отличить рабочий туннель
+// от режима обхода не может: интерфейс есть в обоих случаях.
+if (!defined('WGP_HEALTH_FILE')) define('WGP_HEALTH_FILE', WGP_DATA_DIR . '/health');
 if (!defined('WGP_TABLE_ID'))   define('WGP_TABLE_ID',   '120');
 
 // Адреса, которыми демон проверяет связь через туннель.
@@ -120,25 +124,37 @@ if (!defined('WGP_SESSION_MAX')) define('WGP_SESSION_MAX', 7 * 24 * 3600); // 7 
  * это переносит риск, а не убирает. Компрометация веб-панели тогда means
  * компрометация root-пароля сервера. Отдельный хеш даёт изоляцию.
  *
- * Legacy-фолбэк на $truepassword оставлен для установок, где файлы панели
- * обновили вручную, не перезапуская инсталлятор. При полной переустановке
- * файл хеша создаётся всегда, и эта ветка не используется.
+ * Запасного пути на пароль из login.php БОЛЬШЕ НЕТ — см. комментарий
+ * в теле функции. Сбой конфигурации должен закрывать доступ, а не открывать.
  */
 function wgp_check_password(string $input, ?string $legacyPlain = null): bool {
     if ($input === '' || strlen($input) > 256) return false;
 
-    if (is_readable(WGP_AUTH_FILE)) {
-        $hash = trim((string) @file_get_contents(WGP_AUTH_FILE));
-        if ($hash !== '') {
-            return password_verify($input, $hash);
-        }
+    /*
+     * FAIL-CLOSED: нет читаемого хеша — отказ, и точка.
+     *
+     * Раньше здесь был запасной путь на пароль из login.php. Установщик
+     * затирает ту строку через sed по точному шаблону, но если шаблон
+     * не совпадёт (правка форматирования login.php), либо файл хеша
+     * окажется пуст или недоступен на чтение, проверка сваливалась
+     * на легаси-ветку — и панель принимала 'defaultpass'.
+     * То есть сбой конфигурации ОТКРЫВАЛ доступ вместо того, чтобы закрыть.
+     *
+     * Параметр $legacyPlain оставлен в сигнатуре, чтобы не ломать вызовы,
+     * но сознательно игнорируется.
+     */
+    if (!is_readable(WGP_AUTH_FILE)) {
+        wgp_log('ERR', 'Файл с хешем пароля недоступен: ' . WGP_AUTH_FILE . ' — вход невозможен');
+        return false;
     }
 
-    // Legacy: старая установка без файла хеша.
-    if ($legacyPlain !== null && $legacyPlain !== '') {
-        return hash_equals($legacyPlain, $input);
+    $hash = trim((string) @file_get_contents(WGP_AUTH_FILE));
+    if ($hash === '') {
+        wgp_log('ERR', 'Файл с хешем пароля пуст: ' . WGP_AUTH_FILE . ' — вход невозможен');
+        return false;
     }
-    return false;
+
+    return password_verify($input, $hash);
 }
 
 /**
@@ -166,7 +182,20 @@ function wgp_session_kill(string $reason = ''): void {
     }
     session_destroy();
     $q = ($reason !== '' && $reason !== 'auth') ? '?reason=' . urlencode($reason) : '';
-    header('Location: login.php' . $q);
+
+    /*
+     * Путь от корня сайта, а не относительный.
+     *
+     * Страницы лежат в /pages/ и доступны по HTTP напрямую. При обращении
+     * к /pages/tunnel.php с истёкшей сессией относительный 'login.php'
+     * разрешался браузером в /pages/login.php — то есть в 404 вместо
+     * формы входа.
+     */
+    $base = rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? '/'), '/');
+    if (substr($base, -6) === '/pages') {
+        $base = substr($base, 0, -6);
+    }
+    header('Location: ' . ($base === '' ? '' : $base) . '/login.php' . $q);
     exit();
 }
 
@@ -412,7 +441,7 @@ function wgp_killswitch_on(): bool {
     return preg_match('/^killswitch=true$/m', $raw) === 1;
 }
 
-/** Атомарно сохраняет настройку. Демон подхватит её в течение 15 секунд. */
+/** Атомарно сохраняет настройку. Демон подхватит её в течение пяти секунд. */
 function wgp_killswitch_set(bool $on): bool {
     $tmp = WGP_SETTINGS_FILE . '.tmp';
     $val = $on ? 'true' : 'false';
@@ -427,6 +456,45 @@ function wgp_killswitch_set(bool $on): bool {
     }
     @chmod(WGP_SETTINGS_FILE, 0664);
     return true;
+}
+
+/**
+ * Реальное состояние туннеля по данным демона.
+ *
+ * @return array{known:bool, alive:bool, bypass:bool, age:int}
+ *   known  — демон писал файл и данные свежие
+ *   alive  — последняя проверка связи прошла
+ *   bypass — трафик клиентов сейчас идёт мимо туннеля
+ *   age    — сколько секунд назад демон обновлял файл
+ *
+ * Если файла нет или он старше двух минут, считаем сведения неизвестными:
+ * лучше показать «состояние неизвестно», чем уверенно соврать по данным,
+ * оставшимся от остановленного демона.
+ */
+function wgp_health(): array {
+    $unknown = ['known' => false, 'alive' => false, 'bypass' => false, 'age' => -1];
+    if (!is_readable(WGP_HEALTH_FILE)) return $unknown;
+
+    $raw = (string) @file_get_contents(WGP_HEALTH_FILE);
+    if ($raw === '') return $unknown;
+
+    $kv = [];
+    foreach (explode("\n", $raw) as $line) {
+        if (strpos($line, '=') === false) continue;
+        [$k, $v] = explode('=', $line, 2);
+        $kv[trim($k)] = trim($v);
+    }
+
+    $at  = isset($kv['AT']) ? (int) $kv['AT'] : 0;
+    $age = $at > 0 ? (time() - $at) : -1;
+    if ($age < 0 || $age > 120) return $unknown;
+
+    return [
+        'known'  => true,
+        'alive'  => ($kv['TUNNEL'] ?? '0') === '1',
+        'bypass' => ($kv['BYPASS'] ?? '0') === '1',
+        'age'    => $age,
+    ];
 }
 
 /** Ротация: при превышении лимита оставляем последние WGP_LOG_KEEP строк. */
