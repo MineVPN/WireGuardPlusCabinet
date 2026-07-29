@@ -31,7 +31,7 @@ $up        = wgp_iface_exists();
     <div class="card__head"><h2 class="card__title">Что такое WireGuard+</h2></div>
 
     <p style="color: var(--text-dim); line-height: 1.7; margin-bottom: var(--s-5)">
-      Это услуга для подключения к любой стране без ограничений — например, из Украины в Россию.
+      Это услуга для подключения к любой стране без ограничений.
       Напрямую так подключиться нельзя. Нужен <strong style="color: var(--text)">промежуточный
       сервер в Европе</strong>, и WireGuard+ как раз им и является.
     </p>
